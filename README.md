@@ -100,7 +100,7 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 3. 대상 디스크를 ESP와 APFS용 파티션으로 나누고, ESP에 OpenCore와 macOS 복구 이미지(`macrecovery.py`)를 넣는다.
 4. 실기기에서 복구 이미지가 부팅되지 않았다. 그래서 Ubuntu에서 QEMU 가상 머신을 띄우고 **실기기 디스크 전체를 그대로 물려** 설치했다. 화면과 입력은 QMP 소켓으로 원격 조작한다.
 5. 같은 디스크를 실기기에서 OpenCore로 부팅한다. 실패하면 가상 머신으로 다시 부팅해 macOS 안의 로그를 읽는다.
-6. 실기기 첫 부팅 문제 네 가지를 순서대로 고친다: MMIO 화이트리스트, NVMeFix 끔, MCE 리포터 차단(`kext/AppleMCEReporterDisabler.kext`), PCI 리비전을 Navi 23 값으로 보고.
+6. 실기기 첫 부팅 문제 네 가지를 순서대로 고친다: MMIO 화이트리스트, NVMeFix 제거, MCE 리포터 차단(`kext/AppleMCEReporterDisabler.kext`), PCI 리비전을 Navi 23 값으로 보고.
 
 사용자가 직접 해야 하는 것: USB 부팅, 가상 머신 안에서의 계정 생성과 원격 로그인 켜기.
 
@@ -150,7 +150,7 @@ ssh <M8> 'ioreg -l -w0 | grep -E "MetalPluginName|IOClass.*GraphicsAccelerator"'
 3. HWLibs에는 VCN 3.0 펌웨어만 있어, Rembrandt용 VCN 3.1.2 펌웨어(linux-firmware)를 그 자리에 넣는다.
 4. 가속기가 채우는 MM hub VM 레지스터 주소도 2.3으로 바꾼다.
 5. `MMMC_VM_MX_L1_TLB_CNTL`의 `ENABLE_ADVANCED_DRIVER_MODEL`이 꺼져 있어 출력이 검은 화면이었다. 이 비트를 켠다.
-6. 디코딩 완료 인터럽트가 가속기에 도착하지 않아 프레임당 16.7 또는 33.3ms가 걸렸다(초당 30프레임). 완료를 기다리는 것이 있으면 1ms마다 타임스탬프를 확인하는 스레드를 넣었다(`stampPoll`). 근본 원인은 아직 모른다.
+6. 디코딩 완료 인터럽트가 가속기에 도착하지 않아 프레임당 16.7 또는 33.3ms가 걸렸다(초당 30프레임). 완료를 기다리는 것이 있으면 1ms마다 타임스탬프를 확인하는 스레드를 넣었다(`stampPoll`). 근본 원인은 아직 모른다. 이후 대조 시험(2026-11-11)에서는 stampPoll을 꺼도 33ms 멈춤이 재현되지 않았고, 켰을 때의 이득은 처리량 7에서 12%였다. 비용이 작아 켜 둔다.
 
 목표: VideoToolbox가 H.264와 HEVC를 하드웨어로 디코딩한다.
 
@@ -168,7 +168,7 @@ ssh <M8> './vtprobe query; ./vtprobe check test-hevc.mp4 60; ./vtprobe decode te
 
 - `query`가 `h264 hardware decode: YES`, `hevc hardware decode: YES`를 낸다.
 - `check`가 하드웨어와 소프트웨어 출력의 밝기 차이를 낸다. 0에 가까워야 한다. 하드웨어 출력의 평균 밝기가 16 근처면 검은 화면이 나오는 것이다(`ENABLE_ADVANCED_DRIVER_MODEL` 문제를 의심한다).
-- `decode`가 초당 프레임 수를 낸다. 정확히 영상의 프레임률이나 30으로 나오면 완료 통지가 늦는 것이다. `stampPoll`이 설치됐는지 디스크 로그에서 `stamppoll: installed`를 찾는다. 이 기록에서는 수정 후 초당 120에서 150프레임이었다.
+- `decode`가 초당 프레임 수를 낸다. 정확히 영상의 프레임률이나 30으로 나오면 완료 통지가 늦는 것이다. `stampPoll`이 설치됐는지 디스크 로그에서 `stamppoll: installed`를 찾는다. 1080p HEVC 기준으로 화면이 켜져 있으면 초당 약 120에서 130프레임, 꺼져 있으면 약 270에서 305프레임이 나온다. 화면 상태에 따라 2배 넘게 차이 나므로 같은 상태끼리 비교한다(원인은 미확인).
 
 실패 시: VCN이 멈추면 GPU 전체가 멈출 수 있다. 이때는 워치독 패닉(약 2분)을 기다리면 깨끗이 재부팅된다. `-rmbvcn`을 빼고 부팅하면 디코딩 없이 돌아간다. 부팅 자체가 안 되면 Ubuntu 라이브 USB로 들어가 ESP의 `RembrandtGfx.prev`와 `config-prev.plist`로 되돌린다.
 
@@ -340,7 +340,7 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 - 실험 기록이다. 커널 확장의 훅과 구조체 오프셋, AV1 디코더의 구조체 배치는 macOS 15.8.2의 바이너리를 역분석해 얻은 것이라, macOS를 업데이트하면 깨질 수 있다. 업데이트 후에는 플러그인 이미지도 다시 만들어야 한다(스크립트가 빌드 번호가 다르면 마운트하지 않는다).
 - `/System/Library/Video/Plug-Ins` 위에 이미지를 마운트하는 방식과 서명 없는 번들 로드는 SIP 일부를 끈 상태를 전제로 한다. 보안이 약해진다는 뜻이다.
 - AV1 디코더는 8비트와 10비트 4:2:0을 받는다. 10비트는 P010 표면으로 출력한다. 10비트는 1080p에서만 대조했고, Safari의 HDR 재생은 확인하지 않았다. 참조 프레임 축약 신호(`frame_refs_short_signaling`)는 구현하지 않았다.
-- VP9도 같은 방식(드라이버의 AV1 경로를 빌림)으로 하드웨어 디코딩했지만 제거했다. Safari는 권한 때문에 VP9를 자기 프로세스 안에서 디코딩하는데, 서명 없는 번들은 그 프로세스의 라이브러리 검증에 막혀 못 올라가 소프트웨어로 떨어진다. 시스템 경로에서는 됐지만 실제 쓰임(Safari)에서 실효가 없어 뺐다. 이력은 `docs/worklog-av1-s3.md`에 있다.
+- VP9는 소프트웨어로 디코딩된다. Safari는 VP9를 자기 프로세스 안에서 디코딩하는데, 서명 없는 디코더 번들은 그 프로세스의 라이브러리 검증에 막혀 올라가지 못한다.
 - 확인하지 않은 것은 문서에 "미확인"이나 "추정"으로 적어 두었다.
 
 ## 문서 목록

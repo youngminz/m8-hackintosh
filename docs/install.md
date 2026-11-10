@@ -139,7 +139,6 @@ ssh ubuntu@<M8_IP> 'set -e; D=<DISK>
 | AmdTscSync | 2.0.0 | naveenkrdy/AmdTscSync | 켬 |
 | RestrictEvents | 1.1.6 | acidanthera/RestrictEvents | 켬 |
 | LucyRTL8125Ethernet | 1.2.4 | Mieze/LucyRTL8125Ethernet | 켬 |
-| NVMeFix | 1.1.3 | acidanthera/NVMeFix | 끔 (7.3절) |
 | AppleMCEReporterDisabler | 직접 작성한 plist 전용 kext | 7.4절 | 켬 |
 | RembrandtGfx | 0.1.0 + M8용 패치 | ref-winmax2 소스를 직접 빌드 | 켬 |
 
@@ -209,7 +208,7 @@ M8에 맞게 바꾼 것
 | `ACPI.Patch` | 전부 끔 |
 | 코어 수 패치 (`Force cpuid_cores_per_package`) | `Replace`를 `BA 08 00 00 00`에서 `BA 06 00 00 00`으로 (6코어) |
 | `DeviceProperties` | GPU 경로 하나만 남기고 `ATY,bin_image`를 M8 VBIOS로, `model = AMD Radeon 660M` |
-| `Kernel.Add` | 5.1절의 kext 8개, 순서는 Lilu, VirtualSMC, NVMeFix, AmdTscSync, AppleMCEReporterDisabler, RestrictEvents, LucyRTL8125Ethernet, RembrandtGfx |
+| `Kernel.Add` | 5.1절의 kext 7개, 순서는 Lilu, VirtualSMC, AmdTscSync, AppleMCEReporterDisabler, RestrictEvents, LucyRTL8125Ethernet, RembrandtGfx |
 | `Misc.Debug` | `AppleDebug`, `ApplePanic`, `DisableWatchDog` 켬, `Target = 67`(파일 로그) |
 | `Misc.Boot` | `PickerMode = Builtin`, `HideAuxiliary = false`, `Timeout = 10`, `PollAppleHotKeys = true` |
 | `Misc.Security` | `SecureBootModel = Disabled`, `AllowSetDefault = true`, `ScanPolicy = 0` |
@@ -419,13 +418,13 @@ esac
   결과적으로 켜진 항목은 `0xFD000000`(선행 사례), `0xE0000000`, `0xFEE01000` 세 개다.
 - 효과: 빠른 리셋이 사라지고 다시 원래 지점까지 올라갔다. 두 항목 각각이 꼭 필요한지는 따로 분리해 시험하지 않았다.
 
-### 7.3 NVMeFix 끔 [커밋 9a66bb6]
+### 7.3 디스크 쓰기 멈춤: NVMeFix 제거 [커밋 9a66bb6]
 
 - 진단 도구: RembrandtGfx의 디스크 로그 기능. `-rmbverbose`가 있고 `-rmbnodisklog`가 없으면 커널 메시지 버퍼를 0.5초마다 `/private/var/log/rmb-msgbuf.log`에 fsync한다. GPU 드라이버를 켠 설정(`config-rmb.plist`)으로 부팅한 뒤 가상 머신에서 이 파일을 꺼냈다(`logs/rmb-msgbuf-bm1.log`).
 - 증상: 디스크 로그는 부팅 9.4초에서 끊겼는데, 화면(사용자 사진)에는 그 뒤의 커널 메시지가 계속 찍혀 있었다. 즉 커널은 살아 있고 디스크 쓰기만 멈춘 상태였다. [세션 06:40부터 06:44]
 - 판단: 대상 SSD는 DRAM 없는 Maxio MAP1202(`nvme id-ctrl`에서 `hmpre 4096`, `apsta 0x1`). 가상 머신에서는 가상 SATA로 보였기 때문에 문제가 없었고, NVMe로 직접 쓰는 것은 실기기 부팅이 처음이었다. 타사 SSD의 절전(APST)을 켜는 NVMeFix를 원인으로 보고 껐다.
-- 설정: `Kernel.Add`의 `NVMeFix.kext` 항목 `Enabled = false`.
-- 효과: 멈춤이 부팅 11.7초의 커널 패닉으로 바뀌었다(더 진행됨). NVMeFix가 원인이라는 직접 증거(타임아웃 로그 등)는 확보하지 않았고, 이후 다시 켜서 재현해 보지도 않았다.
+- 설정: `NVMeFix.kext`를 EFI에서 뺐다. 처음에는 `Kernel.Add`에서 끄기만 했고, 이후 NVMeFix 없이 계속 정상 동작해서 항목과 파일을 모두 지웠다.
+- 효과: 멈춤이 부팅 11.7초의 커널 패닉으로 바뀌었다(더 진행됨).
 
 ### 7.4 AppleIntelMCEReporter 패닉 차단 [커밋 9a66bb6]
 
@@ -557,7 +556,7 @@ ssh -t m8lan "sudo mkdir -p /usr/local/sbin && sudo install -o root -g wheel -m 
 | 5 | `systemctl poweroff`가 데스크톱 세션 잠금에 막힘, 라이브 세션이 종료 직전 Enter를 기다림 | `systemd-inhibit --list` | `systemctl poweroff -i`, `reboot --force -i` |
 | 6 | 설치된 macOS가 실기기에서 `IOG flags 0x3` 부근 정지, 로그 없음 | 가상 머신으로 디스크 로그 확인(0바이트) | 7.2부터 7.5의 네 가지를 차례로 해결 |
 | 7 | `DevirtualiseMmio`를 끄자 즉시 리셋 | ESP의 OpenCore 로그 타임스탬프 | 다시 켜고 `MmioWhitelist`에 `0xE0000000`, `0xFEE01000` 추가 |
-| 8 | 부팅 9.4초에 디스크 쓰기만 멈춤 | RembrandtGfx 디스크 로그와 화면 사진 비교, `nvme id-ctrl` | `NVMeFix.kext` 끔 |
+| 8 | 부팅 9.4초에 디스크 쓰기만 멈춤 | RembrandtGfx 디스크 로그와 화면 사진 비교, `nvme id-ctrl` | `NVMeFix.kext` 제거 |
 | 9 | 부팅 11.7초 커널 패닉(페이지 폴트) | NVRAM `AAPL,PanicInfo*`를 `efipanic.py`로 해독 | `AppleIntelMCEInterruptController` 매치를 가로채는 plist kext 작성 |
 | 10 | 받아 온 `AppleMCEReporterDisabler`가 효과 없음 | `Info.plist`의 `IOKitPersonalities`가 빈 것을 확인 | 설치된 macOS의 실제 퍼스널리티를 보고 새로 작성 |
 | 11 | 패닉 없이 화면만 안 나옴, 시스템은 살아 있음 | `ttl_initialize = 1` 로그, 커널 컬렉션 역어셈블로 지원 장치 표 확인 | RembrandtGfx가 PCI 리비전을 `0xC1`로 보고하게 패치 |
@@ -598,11 +597,10 @@ ssh -t m8lan "sudo mkdir -p /usr/local/sbin && sudo install -o root -g wheel -m 
 2. Ventoy 설치 방법과 버전: 기록에 없다. 이미 만들어져 있던 USB를 썼다.
 3. 실기기 복구 이미지 정지의 원인: 확인하지 않고 우회했다. 7절의 문제들(MCE 리포터, MMIO)과 같은 원인이었을 가능성이 있지만 수정 후 복구 이미지를 다시 부팅해 보지 않았다.
 4. MMIO 화이트리스트: 추가한 두 항목(`0xE0000000`, `0xFEE01000`) 각각의 필요 여부를 분리 시험하지 않았다. 처음 설정(`0xFD000000`만 있는 상태)에서의 정지가 MMIO 때문이었는지도 직접 증명되지 않았다. 다른 수정들과 겹쳐 있다. 참고로 `0xFD000000` 항목의 주석은 선행 사례에서 온 "AMD FCH AcpiMmio 0xFED80000"인데 주소와 주석이 일치하지 않는다.
-5. NVMeFix: 끈 뒤 진행이 달라진 것은 사실이지만, NVMe 타임아웃 같은 직접 증거는 없고 다시 켜서 재현하지도 않았다. 다른 SSD에서는 필요 없을 수 있다.
-6. `Boot0001` 항목이 한 번 "없다"고 나온 이유: 다음 부팅에서 다시 보였다. 세션은 일시적인 NVRAM 읽기 문제로 추정했다. 그 사이 약 7분간 M8의 상태는 확인되지 않았다.
-7. 복구 이미지 버전: 세션은 15.4.1이라고 적었지만 화면을 보고 말한 것이고 명령 출력으로 확인한 기록은 없다. 설치 프로그램이 내려받은 최종 버전(15.8.2)만 확실하다.
-8. 사용자가 VNC로 계정을 만든 구간(04:12부터 05:41): 무엇을 입력했는지 기록이 없다. 05:08에 세션이 한 번 요약(컨텍스트 압축)되어 그 직전 일부는 요약으로만 남아 있다.
-9. 선행 사례에 리비전 패치가 없었던 이유: 세션은 "GPD의 GPU 리비전이 목록에 있어서"라고 추정했지만 확인하지 않았다.
+5. `Boot0001` 항목이 한 번 "없다"고 나온 이유: 다음 부팅에서 다시 보였다. 세션은 일시적인 NVRAM 읽기 문제로 추정했다. 그 사이 약 7분간 M8의 상태는 확인되지 않았다.
+6. 복구 이미지 버전: 세션은 15.4.1이라고 적었지만 화면을 보고 말한 것이고 명령 출력으로 확인한 기록은 없다. 설치 프로그램이 내려받은 최종 버전(15.8.2)만 확실하다.
+7. 사용자가 VNC로 계정을 만든 구간(04:12부터 05:41): 무엇을 입력했는지 기록이 없다. 05:08에 세션이 한 번 요약(컨텍스트 압축)되어 그 직전 일부는 요약으로만 남아 있다.
+8. 선행 사례에 리비전 패치가 없었던 이유: 세션은 "GPD의 GPU 리비전이 목록에 있어서"라고 추정했지만 확인하지 않았다.
 10. `csr-active-config = 03020000` 등 선행 사례에서 그대로 가져온 값들의 필요 여부는 검토하지 않았다.
 11. SMBIOS 일련번호가 Apple에 등록되지 않은 값인지 확인한 기록이 없다. Apple 계정 로그인은 건너뛰었다.
 12. 본체 RTL8125(LucyRTL8125Ethernet) 동작: 설치 구간에서는 모니터의 USB 랜으로 연결됐다. 07:21 이후 본체 랜 주소로 접속한 기록이 있어 동작하는 것으로 보이지만 범위 밖이다.
