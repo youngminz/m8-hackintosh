@@ -29,12 +29,15 @@ int main(int argc, const char **argv) {
         if (getenv("BUNDLEDIR")) printf("VTRegisterVideoDecoderBundleDirectory = %d\n", (int)VTRegisterVideoDecoderBundleDirectory((__bridge CFURLRef)[NSURL fileURLWithPath:@(getenv("BUNDLEDIR")) isDirectory:YES]));
         if (!system && getenv("INFO")) VTRegisterVideoDecoderWithInfo('av01', (__bridge CFDictionaryRef)@{@"VTIsHardwareAccelerated": @YES}, AV1AMD_CreateInstance);
         else if (!system) VTRegisterVideoDecoder('av01', AV1AMD_CreateInstance);
-        if (getenv("SUPP")) VTRegisterSupplementalVideoDecoderIfAvailable('av01');
-        printf("VTIsHardwareDecodeSupported(av01) = %d\n", VTIsHardwareDecodeSupported('av01'));
+        // CODEC=vp09 SUPP=1: VP9 decoders are "supplemental"; a client has to ask for them first (WebKit does).
+        const char *cn = getenv("CODEC") ? getenv("CODEC") : "av01";
+        CMVideoCodecType codec = (CMVideoCodecType)((uint32_t)cn[0] << 24 | (uint32_t)cn[1] << 16 | (uint32_t)cn[2] << 8 | (uint32_t)cn[3]);
+        if (getenv("SUPP")) VTRegisterSupplementalVideoDecoderIfAvailable(codec);
+        printf("VTIsHardwareDecodeSupported(%s) = %d\n", cn, VTIsHardwareDecodeSupported(codec));
         CFArrayRef list = NULL;
         VTCopyVideoDecoderList(NULL, &list);
         for (NSDictionary *e in (__bridge NSArray *)list)
-            if ([[e description] containsString:@"av01"] || [[e description] containsString:@"AV1"] || [[e description] containsString:@"1635135537"]) printf("decoder: %s\n", [[[e description] stringByReplacingOccurrencesOfString:@"\n" withString:@" "] UTF8String]);
+            if ([[e description] containsString:@"AMD VCN"] || [[e description] containsString:@"1635135537"] || [[e description] containsString:@"1987063865"]) printf("decoder: %s\n", [[[e description] stringByReplacingOccurrencesOfString:@"\n" withString:@" "] UTF8String]);
         printf("%ld decoders listed\n", list ? CFArrayGetCount(list) : 0);
         AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:@(argv[1])] options:nil];
         AVAssetTrack *track = [[asset tracksWithMediaType:AVMediaTypeVideo] firstObject];

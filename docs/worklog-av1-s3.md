@@ -107,3 +107,18 @@
 ## 18:02 정정: 실험 3은 걸리지 않았음
 - 17:57에 건 `pmset sleepnow`가 실행되지 않았다(전원 기록에 Sleep 없음, ping이 18:00까지 계속 응답). SSH 세션이 닫히면서 지연 실행하던 백그라운드 명령이 같이 죽은 것으로 보임. M8는 S3가 아니라 로그인 창에서 깨어 있는 상태다.
 - 다음에는 `ssh m8lan 'nohup sh -c "sleep 3; pmset sleepnow" >/dev/null 2>&1 &'`처럼 nohup으로 걸고, 전원 기록에 Sleep 줄이 생겼는지 ping이 끊겼는지로 확인한 뒤 사용자에게 버튼을 부탁할 것.
+
+## 19:40 갱신: VP9 하드웨어 디코딩 성공 (커밋 8d0e00b, 3152612)
+- 방법: 드라이버에 VP9 처리기가 없어 AV1 디코더(subId 0x1000000)를 만들게 하고, `AvdVcnAv1DecDataProcessor`의 가상 함수 표(공유 캐시 __DATA_CONST, mach_vm_protect COPY로 쓰기)에서 세 슬롯을 바꿈.
+  - 0x10 `ProcessCreateDecodeSession`: 원본 호출 뒤 생성 메시지(`ctx+0xe0`)의 `stream_type`(메시지 +0x28)을 0x13에서 0x11로.
+  - 0x60 `initHWContext`: 문맥 버퍼(`ctx+0x1d0` 텍스처의 `+0x98`, 크기 `ctx+0x1c8` = 0x22b9a00)를 0으로 지우고 VP9 기본 확률(앞 2071바이트)을 씀.
+  - 0x70 `SetDecodeMessageFields`: 원본 호출 뒤 메시지 버퍼(`ctx+0x98[ctx+0xd8]` 텍스처의 `+0x98`)에서 색인 항목 0x11(AV1, 0xdf8바이트)을 0xE(VP9, 120바이트)로 바꾸고 VP9 메시지를 씀. 공통 메시지의 `stream_type`, 폭과 높이, `db_pitch`(64 정렬), `db_pitch_uv` 0. 확률 버퍼(`ctx+0x1f0[ctx+0x270]` 텍스처의 `+0x98`)에 VP9 확률 표와 세그먼트 구역.
+  - 경로: 처리기 `+0x10` = 디코더, 디코더 `+0x58` = ctx, 디코더 `+0x110` = 처리기. 훅은 드라이버 호출 스레드에서 동기 실행됨(생성은 CreateContexts 안, 나머지는 ScheduleAVDCommands 안).
+- DPB는 드라이버의 AV1용 고정 DPB(`dpb_size` 0x2857800 at 1080p)를 그대로 씀. Mesa는 VCN 3에서 동적 DPB tier 2를 쓰지만 고정 DPB로도 동작했다. 참조는 DPB 칸 번호(0..8)로 넘김.
+- 비트스트림은 프레임 전체(슈퍼프레임 색인 제외)를 128 배수로 0 채움. AV1용 더미 매개변수(타일 1개, 프레임 크기)를 넘겨 드라이버 코드가 돌게 함.
+- 결과(`tools/vp9dec/vp9dec`): 1080p 120프레임, 1080p 타일 4열 60프레임, 4K 타일 20프레임 모두 ffmpeg 소프트웨어 디코딩과 화소 단위 일치. 프레임당 3ms(1080p), 8에서 9ms(4K).
+- VideoToolbox: `tools/vp9dec/vp9vt.c`를 AV1AMDDecoder.bundle에 함께 빌드(`VP9AMD_CreateInstance`, Info.plist에 vp09 항목). vtable 교체가 프로세스 전체에 걸리므로 훅은 스레드 로컬(`tCur`)이 설정된 경우에만 동작, 아니면 원본으로 통과. AV1과 VP9 동시 실행 확인.
+- VP9는 보조 디코더라 클라이언트가 `VTRegisterSupplementalVideoDecoderIfAvailable('vp09')`를 불러야 목록에 들어감. 그 뒤 `VTIsHardwareDecodeSupported('vp09') = 1`. `vtprobe query`(그 호출 없음)는 여전히 no로 나옴. VTDecoderXPCService에서 120프레임 디코딩, 화소 단위 일치.
+- 미확인: Safari 유튜브가 VP9 하드웨어를 고르는지(로그인과 화면 확인 필요), 세그멘테이션이나 숨은 참조 프레임이 든 스트림(시험 영상에 없었음), 10비트(profile 2, 거부함), 스트림 중간 해상도 변경.
+- 참고: 역분석을 맡긴 하위 작업은 문서 저장이 안전 분류기에 막혀 결과를 남기지 못했고, 필요한 오프셋은 직접 디스어셈블로 확인함.
+- 속도 참고: 이 부팅에서 VideoToolbox HEVC 289fps, AV1 240fps, VP9 86fps.

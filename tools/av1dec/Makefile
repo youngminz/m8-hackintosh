@@ -6,9 +6,9 @@ av1dec: av1dec.c av1hdr.c av1hdr.h avdfill.h
 	$(CC) -o $@ av1dec.c av1hdr.c $(FW)
 vtav1test: vtav1test.m av1vt.c av1hdr.c av1hdr.h avdfill.h
 	$(CC) -fobjc-arc -o $@ vtav1test.m av1vt.c av1hdr.c $(FW) -framework Foundation -framework AVFoundation
-AV1AMDDecoder.bundle: av1vt.c av1hdr.c av1hdr.h avdfill.h Info.plist
+AV1AMDDecoder.bundle: av1vt.c av1hdr.c av1hdr.h avdfill.h Info.plist ../vp9dec/vp9vt.c ../vp9dec/vp9hdr.c
 	mkdir -p $@/Contents/MacOS
-	$(CC) -bundle -fvisibility=hidden -o $@/Contents/MacOS/AV1AMDDecoder av1vt.c av1hdr.c $(FW)
+	$(CC) -bundle -fvisibility=hidden -o $@/Contents/MacOS/AV1AMDDecoder av1vt.c av1hdr.c ../vp9dec/vp9vt.c ../vp9dec/vp9hdr.c -Wno-unused-function $(FW)
 	cp Info.plist $@/Contents/Info.plist
 	codesign -f -s - $@
 clean:
