@@ -56,6 +56,7 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 | `tools/avdprobe`, `tools/avdtrace` | AMD VA 드라이버 직접 호출과 호출 추적 |
 | `tools/av1dec` | AV1 헤더 파서, 단독 디코더, VideoToolbox 디코더 번들 |
 | `tools/re` | dyld 공유 캐시와 커널 컬렉션을 직접 파싱해 디스어셈블하는 스크립트 |
+| `tools/hii` | AMI BIOS 설정 양식(HII) 파서. 메뉴에 안 보이는 설정 항목을 찾는다 |
 | `docs/` | 작업 노트와 역분석 문서. VCN 레지스터 지도와 헛다리는 `docs/vcn-h264-hevc-bringup.md` |
 | `hardware/` | `lspci`, `/proc/cpuinfo` 출력 |
 
@@ -282,7 +283,7 @@ ssh <M8> 'sudo tail -c 3000000 /private/var/log/rmb-msgbuf.log | grep -a "wakecr
 
 ### BIOS 설정과 리눅스 대조
 
-메뉴에 안 보이는 BIOS 설정에 S3/Modern Standby 전환 항목이 있다. 펌웨어가 설정 양식(HII)을 메모리에 내보내고 NVRAM 변수 `…:HiiDB`에 그 크기와 주소를 두는데, 이걸 `nvram`으로 읽고, 커널 확장에 넣은 물리 메모리 덤프 기능으로 그 영역을 파일로 떠서 설정 양식을 분석했다. 항목은 `AMD_PBS_SETUP` 변수의 한 바이트이고, macOS에서 그 바이트만 바꿔 쓸 수 있다.
+메뉴에 안 보이는 BIOS 설정에 S3/Modern Standby 전환 항목이 있다. 펌웨어가 설정 양식(HII)을 메모리에 내보내고 NVRAM 변수 `…:HiiDB`에 그 크기와 주소를 두는데, 이걸 `nvram`으로 읽고, 커널 확장에 넣은 물리 메모리 덤프 기능으로 그 영역을 파일로 떠서 설정 양식을 분석했다(`tools/hii`에 파서와 이 기기의 결과 예시). 항목은 `AMD_PBS_SETUP` 변수의 한 바이트이고, macOS에서 그 바이트만 바꿔 쓸 수 있다.
 
 S3 Enable로 바꾸면 펌웨어가 실제로 S3 모드로 전환된다(ACPI 표에서 확인: FADT의 Low Power S0 Idle이 꺼지고 `_S3`이 숨김 없이 노출). 그런데도 깨우기는 같은 지점에서 실패했다. Ubuntu 라이브로 부팅해 `rtcwake -m mem`으로 S3를 걸어도 돌아오지 않았다. **OS를 바꿔도 안 되므로 펌웨어의 S3 복귀 경로가 고장난 것으로 확정했다.** (시험 뒤 설정은 원래 값으로 되돌렸다.)
 
