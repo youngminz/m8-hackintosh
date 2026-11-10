@@ -141,3 +141,16 @@
 ## 2026-11-11: VP9 제거
 
 아래 VP9 하드웨어 디코딩은 시스템 경로(VTDecoderXPCService)와 단독 디코더에서는 동작했지만, 저장소에서 제거했다. Safari(WebKit GPU 프로세스)는 `com.apple.developer.videotoolbox.client-sandboxed-decoder` 권한이 있어 VideoToolbox가 VP9를 그 프로세스 안에서 디코딩하도록 하드코딩되어 있고(코덱 목록에 `vp09` 포함, AV1은 아님), 서명 없는 번들은 그 프로세스의 라이브러리 검증에 막혀 로드되지 못하고 소프트웨어(libvpx)로 떨어진다. 실제 쓰임인 Safari에서 실효가 없어 뺐다. 이 노트의 VP9 관련 서술은 당시 기록으로 그대로 남겨 둔다.
+
+## 2026-11-11: S3 결론 (펌웨어 문제로 확정, 포기)
+
+앞의 "18:00 갱신"에서 중단했던 S3 깨우기 실험을 이어서 끝냈다.
+
+- 다중 칸 wakecrumb: 펌웨어가 CMOS 0x58/0x59를 덮어써서(강제 재부팅 뒤 `25 2a` 등 코드가 적지 않은 값으로 보임), 단계 값을 서로 떨어진 여섯 칸(0x4a/0x6a/0x7a/0xca/0xea 등)에 중복으로 적고 부팅 때 256바이트 전체를 덤프하도록 바꿨다.
+- 결과: 잠자기 → 깨우기에서 네 칸 모두 `0x52`(커널의 `acpi_sleep_kernel` 진입)에서 멈춤. `0x53`(그 함수에서 복귀) 없음. 잠들기 직전 그래픽 드라이버의 잠자기 처리까지 디스크 로그가 남고, 그 뒤 로그는 없음. 즉 그래픽 드라이버 복구 문제가 아니라 그 전에 멈춘다.
+- 깨우기 벡터 기록: `acpi_sleep_kernel` 직전에 OS의 실모드 wake vector(물리 0x2000)와 보호모드 진입점(`[0x2800]`)에 단계(`0x56`, `0x57`)를 심었다. 커널 파일에서 진입 코드 바이트를 확인하고, `acpi_sleep_kernel`이 그 코드를 다시 덮어쓰지 않는 것도 호출 목록으로 확인. 결과: `0x56`이 찍히지 않음 → 펌웨어가 OS의 깨우기 진입점까지 오지 않는다. (전원 버튼을 누르면 팬은 돌지만 OS로 제어가 넘어오지 않음.)
+- BIOS 설정: 메뉴에 안 보이는 `S3/Modern Standby Support` 항목을 찾았다. 펌웨어가 설정 양식(HII)을 메모리에 내보내고 NVRAM 변수 `HiiDB`(크기+주소)로 가리키는 것을 이용해, 그 영역을 커널 확장의 물리 메모리 덤프 기능으로 떠서 IFR 파서로 분석. 항목은 `AMD_PBS_SETUP` 변수(GUID a339d746-…)의 오프셋 0x39: 0 = S3 Enable, 1 = Modern Standby(기본). macOS에서 그 바이트만 `nvram`으로 바꿔 쓸 수 있다(재부팅 뒤 유지됨).
+- S3 Enable(0x39=0)로 바꾼 뒤 펌웨어가 만든 ACPI 표를 물리 메모리에서 떠서 대조: FADT flags가 `0020c5bd` → `0000c5ad`(Low Power S0 Idle 1→0), DSDT에서 `SS3 = 1`, `_S3` 숨김 없이 노출(이전 덤프 대비 19바이트 차이). 즉 펌웨어가 실제로 S3 모드로 전환됨. 그런데도 깨우기는 같은 지점에서 실패.
+- 리눅스 대조: S3 Enable 상태로 Ubuntu 라이브(커널 7.0) 부팅 → `cat /sys/power/mem_sleep`에 `s2idle [deep]`, `ACPI: PM: (supports S0 S3 S4 S5)`. `rtcwake -m mem -s 45`로 재웠으나 복귀 없음(전원 버튼으로도 안 됨). OS를 바꿔도 안 되므로 펌웨어의 S3 복귀 경로가 고장난 것으로 확정.
+- 정리: `AMD_PBS_SETUP`을 원래 값(Modern Standby)으로 되돌림(백업 원본과 바이트 일치 확인). 부팅 설정은 config-usbintx(디스크 로그 꺼짐), 커널 확장의 wakecrumb/깨우기 벡터 기록/물리 덤프는 `-rmbwakecrumb`가 있을 때만 동작하게 바꿔 둠(없으면 CMOS 미접근).
+- 같은 Rembrandt SoC의 GPD Win Max 2에서는 S3가 되므로 SoC가 아니라 이 보드 BIOS(`M8 V1.04`)의 문제. 제조사 BIOS 업데이트가 나오면 같은 방법으로 재시험.
