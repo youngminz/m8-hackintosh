@@ -21,7 +21,7 @@ Rembrandt(Radeon 660M)의 VCN을 macOS의 Navi 드라이버(AMDRadeonX6000, HWLi
 | GC hub 기준 (GC seg0) | 0x1260 | 대조함 |
 | GC 컨텍스트 v의 CNTL, base, start, end | 0x15fc + v, 0x1667 + 2v, 0x1687 + 2v, 0x16a7 + 2v | 대조함 |
 
-주의: 무효화 엔진의 SEM 레지스터는 **읽기만 해도 세마포어를 잡는다.** 상태를 덤프할 때 절대 읽지 않는다.
+참고: 무효화 엔진의 SEM 레지스터는 **읽기만 해도 세마포어를 잡는다.** 그래서 상태 덤프는 REQ와 ACK만 읽는다.
 
 ### 가속기의 fillVMRegisters
 
@@ -75,13 +75,13 @@ IP discovery가 알려 주는 0x13200에 가속기의 `AMDMMHub_2_x::fillVMRegis
 - **레지스터 추적 (`-rmbvcntrace`)**: HWLibs의 `internal_cgs_write_register`, `internal_cgs_read_register`와 VCN, 큐, 엔진, MMHUB 초기화 함수 40여 개를 훅해 레지스터 접근을 기록한다. 절대 주소는 `off + *(*(ctx + 0x10) + 0x34 + seg * 4)`다.
 - **한 번만 켜는 모드 (`-rmbvcnarm`)**: 부팅 때는 VCN을 숨기고, `~/m8/vcn-once` 파일에 내용이 있으면 그때 한 번 켠 뒤 파일을 비운다. 멈춰도 다음 부팅은 정상이다. 커널에서 파일을 비울 때 `O_TRUNC`가 통하지 않아 `vnode_setattr`로 `va_data_size = 0`을 썼다.
 - **실험 스위치와 레지스터 찌르기**: arm 모드에서 `~/m8/vcn-mode`(16진 비트 스위치)와 `~/m8/vcn-poke`(`r ADDR [COUNT]`, `w ADDR VALUE`)를 감시 스레드가 1초마다 읽는다. 재부팅 없이 실험 조건을 바꾸고 레지스터를 읽고 쓸 수 있다.
-- **멈춤 덤프 (`vcnHangDump`)**: 채널 재시작 훅에서 SDMA 페이지 큐, MMHUB 무효화 엔진(REQ와 ACK만), L2 폴트 상태를 덤프한다. SEM은 읽지 않는다.
+- **멈춤 덤프 (`vcnHangDump`)**: 채널 재시작 훅에서 SDMA 페이지 큐, MMHUB 무효화 엔진(REQ와 ACK만), L2 폴트 상태를 덤프한다. SEM은 읽으면 세마포어가 잡혀서 뺐다.
 - **GART 읽기 (`gartRead`)**: VMID 0은 깊이 0의 평평한 테이블이다. 여러 단계 페이지 워크로 읽으면 매핑되지 않은 것으로 나온다. 색인을 `page - start`로 잡아 직접 읽는다.
 - **출력 검증 (`vtprobe check`)**: 같은 프레임을 하드웨어와 소프트웨어로 디코딩해 밝기 차이를 내고 `hw.png`, `sw.png`를 쓴다. 최종 결과는 두 코덱 모두 300프레임 평균 차이 0.000, 동시 디코드 4개 통과, QuickTime의 4K60 HEVC 재생 CPU 약 6%였다. (원 세션 보고)
 
 ## 5. 복구와 함정
 
-- **GPU가 멈춘 상태에서 웜 리부트하지 않는다.** 다음 부팅이 꼬인다. WindowServer 워치독 패닉(약 2분)을 기다리면 깨끗이 재부팅된다.
+- **GPU가 멈춘 상태에서 웜 리부트하면 다음 부팅이 꼬인다.** WindowServer 워치독 패닉(약 2분)을 기다리면 깨끗이 재부팅된다.
 - **Lilu로 같은 함수를 두 번 라우팅하면 패닉이 나고 부팅이 반복된다.**
 - **익명 네임스페이스 안의 심볼을 다른 번역 단위에서 참조하면** 커널 확장에 미정의 심볼로 남아 로드되지 않고, 사과 로고에서 멈춘다. 빌드할 때마다 확인한다.
 
@@ -91,4 +91,4 @@ nm -u RembrandtGfx | grep "^__Z" | c++filt
 
 - **부팅 실패 시**: Ubuntu 라이브 USB로 부팅해 SSH로 접속하고, ESP(이 기기에서는 `nvme0n1p1`)를 마운트해 `EFI/OC/RembrandtGfx.prev`와 `config-prev.plist`로 되돌린다. 그 환경에서 `scp`가 되지 않아 `ssh ... 'cat > file' < local` 방식으로 파일을 보냈다.
 - **OpenCore의 `UEFI > Output > Resolution`을 `Max`로** 해야 부팅 화면과 로그인 창이 4K로 나온다. `configs/config.plist`에 반영돼 있다. (대조함)
-- **sudo 정책**: 설치 스크립트 하나만 비밀번호 없이 허용한다. 실험이 끝나면 `/etc/sudoers.d/m8-apply-oc`와 `/usr/local/sbin/m8-apply-oc`를 지운다.
+- **sudo**: 설치 스크립트 하나만 비밀번호 없이 허용해 썼다. 되돌리려면 `/etc/sudoers.d/m8-apply-oc`와 `/usr/local/sbin/m8-apply-oc`를 지우면 된다.

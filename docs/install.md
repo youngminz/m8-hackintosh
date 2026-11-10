@@ -567,18 +567,18 @@ ssh -t m8lan "sudo mkdir -p /usr/local/sbin && sudo install -o root -g wheel -m 
 | 15 | Ubuntu와 macOS가 같은 IP라 호스트 키 충돌 | SSH 경고 | 별칭별 `HostKeyAlias` |
 | 16 | 통합 로그를 debug로 덤프하니 한 번에 360MB | 파일 크기 | 덤프 방식을 줄였고, 결국 커널 내부 디스크 로그가 유일하게 쓸모 있었다 |
 
-## 11. 반드시 알아 둘 함정
+## 11. 겪어 보고 알게 된 것
 
-1. 실기기에서 복구 이미지로 설치하려고 버티지 않는다. 복구 환경은 멈춰도 로그가 남지 않는다. 설치는 가상 머신으로 하고, 문제는 설치된 시스템에서 디스크 로그로 잡는다.
+1. 실기기의 복구 환경은 멈춰도 로그가 남지 않아 원인을 잡을 수 없었다. 설치는 가상 머신으로 하고, 문제는 설치된 시스템에서 디스크 로그로 잡는 쪽이 빨랐다.
 2. 가상 머신에서 잘 된다고 실기기에서 되는 것이 아니다. 가상 머신은 디스크를 SATA로, CPU를 Intel로, GPU를 가상 장치로 보여 준다. NVMe, AMD 전용 문제, GPU는 실기기에서 처음 드러난다.
 3. 부팅이 멈추면 먼저 "커널이 죽었는지, 디스크 쓰기만 죽었는지"를 구분한다. 화면에는 계속 찍히는데 디스크 로그가 끊기면 저장 장치 문제다. 사용자 영역 진단 데몬은 이 상황에서 아무것도 남기지 못한다.
-4. `DevirtualiseMmio`를 통째로 끄지 않는다. 펌웨어의 런타임 MMIO 영역을 `/sys/firmware/efi/runtime-map`에서 읽어 `MmioWhitelist`에 넣는다.
+4. `DevirtualiseMmio`는 켠 채로 두고, 펌웨어의 런타임 MMIO 영역을 `/sys/firmware/efi/runtime-map`에서 읽어 `MmioWhitelist`에 넣는다.
 5. `AppleMCEReporterDisabler`는 인터넷에 빈 껍데기 사본이 돌아다닌다. `IOKitPersonalities`가 비어 있으면 아무것도 막지 못한다.
 6. `device-id` 위장만으로는 부족하다. Apple의 HWLibs는 PCI 리비전도 표로 확인한다. 660M(리비전 `0x13`)은 거부된다. 다른 Rembrandt 기기도 `lspci`의 리비전을 먼저 확인한다.
-7. 재부팅 전에는 항상 가상 머신을 끄고(`pgrep -x qemu-system-x86`로 확인) ESP를 `sync` 후 언마운트한다. 가상 머신과 호스트가 같은 디스크를 동시에 쓰면 안 된다.
+7. 재부팅 전에는 항상 가상 머신을 끄고(`pgrep -x qemu-system-x86`로 확인) ESP를 `sync` 후 언마운트한다. 가상 머신과 호스트가 같은 디스크를 동시에 쓰면 파일 시스템이 깨질 수 있다.
 8. 디스크 지정은 `by-id` 경로로 한다. 다른 NVMe를 뽑으면 `nvme1n1`이 `nvme0n1`이 된다.
-9. 사용권 동의, 계정 비밀번호, 원격 로그인 켜기, sudoers 편집은 사람이 직접 하거나 명시적으로 승인한 뒤에만 진행했다. 에이전트가 따라 할 때도 같은 지점에서 멈춰 확인을 받아야 한다.
-10. SMBIOS 일련번호, MLB, UUID, ROM은 기기마다 새로 만들고 공개 저장소에 올리지 않는다. 이 저장소의 `smbios.txt`, `efi/EFI/OC/config.plist`, `configs/*.plist`에는 실제 값이 들어 있고, `ventoy/m8-ssh-setup.sh`에는 공개 키와 이메일이, `dump/`에는 기기 일련번호와 MAC 주소가 들어 있을 수 있다. 공개 전에 걸러야 한다.
+9. 사용권 동의, 계정 비밀번호, 원격 로그인 켜기, sudoers 편집은 사람이 직접 하거나 승인한 뒤에 진행했다.
+10. SMBIOS 일련번호, MLB, UUID, ROM은 기기마다 새로 만든다. 이 공개 저장소의 설정에는 자리표시 값이 들어 있다.
 
 ## 12. 확실한 것과 불분명한 것
 
