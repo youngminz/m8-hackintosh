@@ -1,0 +1,71 @@
+diff --git a/src/RembrandtGfx/kern_start.cpp b/src/RembrandtGfx/kern_start.cpp
+index b4bd598..b98df08 100644
+--- a/src/RembrandtGfx/kern_start.cpp
++++ b/src/RembrandtGfx/kern_start.cpp
+@@ -887,8 +887,36 @@ static void scanKmods() {
+ // not from the device-id property. In the VM QEMU's x-pci-device-id faked it; on bare metal
+ // they see the real 1002:1681 and HWLibs rejects the device (ttl_initialize = 1, then the
+ // "Failed to send PPLIB IRI to Accelerator" panic). Report 73ff like the VM did.
+-static mach_vm_address_t orgPciRead16, orgPciRead32;
+-static bool gDevidLogged;
++static mach_vm_address_t orgPciRead8, orgPciRead16, orgPciRead32;
++static bool gDevidLogged, gRevLogged;
++
++// HWLibs' supported-device table (DevIsSupportedDevice, used by ttlIsSupportedDevice) keys Navi 23
++// on the PCI revision too: 0x40-0x43, 0xc1, 0xc3, 0xc7, 0xcb. The GMKtec M8's 660M (6650H) is
++// 1002:1681 rev 0x13, so ttl_initialize returned 1 even with the device id faked, the accelerator
++// never attached and the framebuffer waited forever. Report rev 0xc1 (RX 6600 XT) when the real one
++// is not in that list. `-rmbnopcirev` turns it off.
++static bool gRevSpoof = true;
++static uint32_t wrapPciRead32(void *dev, uint64_t off);
++static bool isNavi23Rev(uint8_t r) {
++	return (r >= 0x40 && r <= 0x43) || r == 0xc1 || r == 0xc3 || r == 0xc7 || r == 0xcb;
++}
++static bool isRembrandt(void *dev) {
++	return FunctionCast(wrapPciRead32, orgPciRead32)(dev, kIOPCIConfigVendorID) == 0x16811002;
++}
++static uint8_t fixRev(uint8_t r, int width) {
++	if (isNavi23Rev(r))
++		return r;
++	if (!gRevLogged)
++		gRevLogged = true, LOG("pcidevid: config read%d revision %02x -> c1", width, r);
++	return 0xc1;
++}
++
++static uint8_t wrapPciRead8(void *dev, uint64_t off) {
++	auto v = FunctionCast(wrapPciRead8, orgPciRead8)(dev, off);
++	if (gRevSpoof && off == kIOPCIConfigRevisionID && isRembrandt(dev))
++		v = fixRev(v, 8);
++	return v;
++}
+ 
+ static uint16_t wrapPciRead16(void *dev, uint64_t off) {
+ 	auto v = FunctionCast(wrapPciRead16, orgPciRead16)(dev, off);
+@@ -896,6 +924,8 @@ static uint16_t wrapPciRead16(void *dev, uint64_t off) {
+ 		if (!gDevidLogged)
+ 			gDevidLogged = true, LOG("pcidevid: config read16 1681 -> 73ff");
+ 		v = 0x73ff;
++	} else if (gRevSpoof && off == kIOPCIConfigRevisionID && isRembrandt(dev)) {
++		v = (v & 0xff00) | fixRev(v & 0xff, 16);
+ 	}
+ 	return v;
+ }
+@@ -906,6 +936,8 @@ static uint32_t wrapPciRead32(void *dev, uint64_t off) {
+ 		if (!gDevidLogged)
+ 			gDevidLogged = true, LOG("pcidevid: config read32 16811002 -> 73ff1002");
+ 		v = 0x73ff1002;
++	} else if (gRevSpoof && off == kIOPCIConfigRevisionID && isRembrandt(dev)) {
++		v = (v & 0xffffff00) | fixRev(v & 0xff, 32);
+ 	}
+ 	return v;
+ }
+@@ -915,7 +947,9 @@ static void routePciDevid(KernelPatcher &patcher, size_t index, mach_vm_address_
+ 		LOG("pcidevid: disabled (-rmbnopcidevid)");
+ 		return;
+ 	}
++	gRevSpoof = !checkKernelArgument("-rmbnopcirev");
+ 	KernelPatcher::RouteRequest reqs[] {
++		{"__ZN11IOPCIDevice19extendedConfigRead8Ey", wrapPciRead8, orgPciRead8},
+ 		{"__ZN11IOPCIDevice20extendedConfigRead16Ey", wrapPciRead16, orgPciRead16},
+ 		{"__ZN11IOPCIDevice20extendedConfigRead32Ey", wrapPciRead32, orgPciRead32},
+ 	};

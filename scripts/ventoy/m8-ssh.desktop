@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=M8 SSH setup
+Exec=sh -c "sudo /usr/local/bin/m8-ssh-setup > /tmp/m8-ssh-setup.log 2>&1"
+X-GNOME-Autostart-enabled=true

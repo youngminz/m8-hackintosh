@@ -1,0 +1,391 @@
+diff --git a/src/RembrandtGfx/Makefile b/src/RembrandtGfx/Makefile
+index 2306032..1ecb4ae 100644
+--- a/src/RembrandtGfx/Makefile
++++ b/src/RembrandtGfx/Makefile
+@@ -11,7 +11,7 @@ KFLAGS := -target x86_64-apple-macos10.15 -mkernel -nostdinc -fno-builtin -fno-c
+ CXXFLAGS := $(KFLAGS) -std=c++17 -fapple-kext -nostdlib -fno-rtti -fno-exceptions \
+             -fno-use-cxa-atexit -mllvm -disable-atexit-based-global-dtor-lowering \
+             -DPRODUCT_NAME=$(NAME) -DMODULE_VERSION=$(VER) -Wno-deprecated-declarations
+-OBJS   := kern_start.o mmio.o smu.o golden.o dmub.o display.o firmware.o probe.o vmwatch.o sleep.o usb4.o umdpatch.o disklog.o vramcrc.o nvcopy.o fw.o plugin_start.o info.o
++OBJS   := kern_start.o mmio.o smu.o golden.o dmub.o display.o firmware.o probe.o vmwatch.o sleep.o usb4.o umdpatch.o disklog.o vramcrc.o nvcopy.o vcn.o fw.o plugin_start.o info.o
+ KEXT   := $(NAME).kext/Contents
+ 
+ all: $(KEXT)/MacOS/$(NAME)
+diff --git a/src/RembrandtGfx/display.cpp b/src/RembrandtGfx/display.cpp
+index c566d2a..3c5e10f 100644
+--- a/src/RembrandtGfx/display.cpp
++++ b/src/RembrandtGfx/display.cpp
+@@ -2585,12 +2585,16 @@ bool isVideoKey(const char *k) {
+ 	       !strcmp(k, "IODVDBundleName");
+ }
+ 
++OSDictionary *gSavedVideo;  // -rmbvcnarm: hidden values, put back when armed
++
+ unsigned stripVideoProps(IORegistryEntry *accel) {
+ 	unsigned n = 0;
+ 	auto props = accel->dictionaryWithProperties();
+ 	auto iter = props ? OSCollectionIterator::withCollection(props) : nullptr;
+ 	while (auto key = iter ? OSDynamicCast(OSSymbol, iter->getNextObject()) : nullptr) {
+ 		if (isVideoKey(key->getCStringNoCopy())) {
++			if (gSavedVideo)
++				gSavedVideo->setObject(key, props->getObject(key));
+ 			accel->removeProperty(key);
+ 			n++;
+ 		}
+@@ -2609,12 +2613,31 @@ void noVideoEngine(void *, wait_result_t) {
+ 		LOG("novcn: no accelerator");
+ 		return;
+ 	}
++	bool arm = vcnArmMode();
++	if (arm)
++		gSavedVideo = OSDictionary::withCapacity(16);
+ 	LOG("novcn: hid %u hardware video properties (VideoToolbox uses software codecs)", stripVideoProps(accel));
+ 	// The driver may publish more at runtime (engine powerUp); keep them off for 3 min.
+-	for (int i = 0; i < 180; i++) {
++	// -rmbvcnarm: VCN hooks are in, the codecs stay hidden until ~/m8/vcn-once is non-empty; the
++	// kext then empties it (one shot: a hang -> watchdog panic -> next boot is hidden again).
++	for (int i = 0; arm || i < 180; i++) {
+ 		IOSleep(1000);
+ 		if (auto n = stripVideoProps(accel))
+ 			LOG("novcn: hid %u more video properties at +%d s", n, i + 1);
++		if (arm && i >= 20 && vcnArmFileConsume()) {
++			unsigned put = 0;
++			auto iter = OSCollectionIterator::withCollection(gSavedVideo);
++			while (auto key = iter ? OSDynamicCast(OSSymbol, iter->getNextObject()) : nullptr) {
++				accel->setProperty(key, gSavedVideo->getObject(key));
++				put++;
++			}
++			OSSafeReleaseNULL(iter);
++			LOG("novcn: armed at +%d s: %u hardware video properties back", i + 1, put);
++			vcnEnableMmContexts();
++			vcnMmMirror("arm");
++			vcnStartSdmaWatch();
++			break;
++		}
+ 	}
+ 	accel->release();
+ }
+diff --git a/src/RembrandtGfx/firmware.cpp b/src/RembrandtGfx/firmware.cpp
+index 8f44a70..bb0f38c 100644
+--- a/src/RembrandtGfx/firmware.cpp
++++ b/src/RembrandtGfx/firmware.cpp
+@@ -54,6 +54,7 @@ IOReturn powerHandler(void *, void *, UInt32 type, IOService *, void *arg, vm_si
+ 		edpPowerOffNow("shutdown");
+ 	}
+ 	else if (sleepEntering(type, arg)) {
++		wakeCrumb(0x51);
+ 		if (type != kIOMessageSystemWillSleep)
+ 			LOG("sleep: from dark wake (capability change drops CPU)");
+ 		vramCrcStep("sleep");
+@@ -65,6 +66,7 @@ IOReturn powerHandler(void *, void *, UInt32 type, IOService *, void *arg, vm_si
+ 		gEdpLinkPause = true;
+ 	}
+ 	else if (type == kIOMessageSystemHasPoweredOn) {
++		wakeCrumb(0x55);
+ 		diskLogSleep(false);
+ 		gKiqSleepSkip = false;
+ 		edpAllowPowerOff(nullptr);  // aborted or finished sleep: wake training OFFs must stay NULLed
+@@ -76,6 +78,7 @@ IOReturn powerHandler(void *, void *, UInt32 type, IOService *, void *arg, vm_si
+ 	else if (cpuCapChange(type, arg, true)) {
+ 		// Resumed into dark wake: the sleep-entry panic clock must stop here (10-27 false panic
+ 		// 38 s after a WillSleep with two dark wakes and no HasPoweredOn in between).
++		wakeCrumb(0x54);
+ 		LOG("wake: dark wake (capability change brings CPU back)");
+ 		vramCrcStep("dark wake");
+ 		diskLogSleep(false);
+diff --git a/src/RembrandtGfx/fw.hpp b/src/RembrandtGfx/fw.hpp
+index 81f0c45..955341e 100644
+--- a/src/RembrandtGfx/fw.hpp
++++ b/src/RembrandtGfx/fw.hpp
+@@ -15,4 +15,5 @@ FW_DECL(rlc_dram)
+ FW_DECL(sdma)
+ FW_DECL(toc)
+ FW_DECL(dmcub)
++FW_DECL(vcn)
+ #define FW_SIZE(n) static_cast<uint32_t>(fw_yc_##n##_end - fw_yc_##n)
+diff --git a/src/RembrandtGfx/fw.s b/src/RembrandtGfx/fw.s
+index 492ae22..88087c2 100644
+--- a/src/RembrandtGfx/fw.s
++++ b/src/RembrandtGfx/fw.s
+@@ -71,3 +71,8 @@ _fw_yc_toc_end:
+ _fw_yc_dmcub:
+ 	.incbin "fw/dmcub.bin"
+ _fw_yc_dmcub_end:
++	.globl _fw_yc_vcn, _fw_yc_vcn_end
++	.p2align 8
++_fw_yc_vcn:
++	.incbin "fw/vcn.bin"
++_fw_yc_vcn_end:
+diff --git a/src/RembrandtGfx/kern_start.cpp b/src/RembrandtGfx/kern_start.cpp
+index b4bd598..58c1745 100644
+--- a/src/RembrandtGfx/kern_start.cpp
++++ b/src/RembrandtGfx/kern_start.cpp
+@@ -759,6 +759,7 @@ static void processHWLibs(KernelPatcher &patcher, size_t index, mach_vm_address_
+ 	patcher.clearError();
+ 	smuRoute(patcher, index, address, size);
+ 	firmwareRoute(patcher, index, address, size);
++	vcnRoute(patcher, index, address, size);
+ 	LOG("HWLibs hooks installed");
+ }
+ 
+@@ -863,8 +864,11 @@ static void scanKmods() {
+ 				processHWLibs(*gPatcher, kexts[i].loadIndex, kmod->address, size);
+ 			else if (i == 1)
+ 				processFramebuffer(*gPatcher, kexts[i].loadIndex, kmod->address, size);
+-			else
++			else {
+ 				probeRouteAccel(*gPatcher, kexts[i].loadIndex, kmod->address, size);
++				if (i == 2)
++					vcnRouteAccel(*gPatcher, kexts[i].loadIndex, kmod->address, size);
++			}
+ 		}
+ 		auto &bl = kexts[BacklightIdx];
+ 		if (!hooked[BacklightIdx] && !strncmp(kmod->name, bl.id, KMOD_MAX_NAME) && kinfoReady(BacklightIdx)) {
+@@ -887,8 +891,36 @@ static void scanKmods() {
+ // not from the device-id property. In the VM QEMU's x-pci-device-id faked it; on bare metal
+ // they see the real 1002:1681 and HWLibs rejects the device (ttl_initialize = 1, then the
+ // "Failed to send PPLIB IRI to Accelerator" panic). Report 73ff like the VM did.
+-static mach_vm_address_t orgPciRead16, orgPciRead32;
+-static bool gDevidLogged;
++static mach_vm_address_t orgPciRead8, orgPciRead16, orgPciRead32;
++static bool gDevidLogged, gRevLogged;
++
++// HWLibs' supported-device table (DevIsSupportedDevice, used by ttlIsSupportedDevice) keys Navi 23
++// on the PCI revision too: 0x40-0x43, 0xc1, 0xc3, 0xc7, 0xcb. The GMKtec M8's 660M (6650H) is
++// 1002:1681 rev 0x13, so ttl_initialize returned 1 even with the device id faked, the accelerator
++// never attached and the framebuffer waited forever. Report rev 0xc1 (RX 6600 XT) when the real one
++// is not in that list. `-rmbnopcirev` turns it off.
++static bool gRevSpoof = true;
++static uint32_t wrapPciRead32(void *dev, uint64_t off);
++static bool isNavi23Rev(uint8_t r) {
++	return (r >= 0x40 && r <= 0x43) || r == 0xc1 || r == 0xc3 || r == 0xc7 || r == 0xcb;
++}
++static bool isRembrandt(void *dev) {
++	return FunctionCast(wrapPciRead32, orgPciRead32)(dev, kIOPCIConfigVendorID) == 0x16811002;
++}
++static uint8_t fixRev(uint8_t r, int width) {
++	if (isNavi23Rev(r))
++		return r;
++	if (!gRevLogged)
++		gRevLogged = true, LOG("pcidevid: config read%d revision %02x -> c1", width, r);
++	return 0xc1;
++}
++
++static uint8_t wrapPciRead8(void *dev, uint64_t off) {
++	auto v = FunctionCast(wrapPciRead8, orgPciRead8)(dev, off);
++	if (gRevSpoof && off == kIOPCIConfigRevisionID && isRembrandt(dev))
++		v = fixRev(v, 8);
++	return v;
++}
+ 
+ static uint16_t wrapPciRead16(void *dev, uint64_t off) {
+ 	auto v = FunctionCast(wrapPciRead16, orgPciRead16)(dev, off);
+@@ -896,6 +928,8 @@ static uint16_t wrapPciRead16(void *dev, uint64_t off) {
+ 		if (!gDevidLogged)
+ 			gDevidLogged = true, LOG("pcidevid: config read16 1681 -> 73ff");
+ 		v = 0x73ff;
++	} else if (gRevSpoof && off == kIOPCIConfigRevisionID && isRembrandt(dev)) {
++		v = (v & 0xff00) | fixRev(v & 0xff, 16);
+ 	}
+ 	return v;
+ }
+@@ -906,6 +940,8 @@ static uint32_t wrapPciRead32(void *dev, uint64_t off) {
+ 		if (!gDevidLogged)
+ 			gDevidLogged = true, LOG("pcidevid: config read32 16811002 -> 73ff1002");
+ 		v = 0x73ff1002;
++	} else if (gRevSpoof && off == kIOPCIConfigRevisionID && isRembrandt(dev)) {
++		v = (v & 0xffffff00) | fixRev(v & 0xff, 32);
+ 	}
+ 	return v;
+ }
+@@ -915,7 +951,9 @@ static void routePciDevid(KernelPatcher &patcher, size_t index, mach_vm_address_
+ 		LOG("pcidevid: disabled (-rmbnopcidevid)");
+ 		return;
+ 	}
++	gRevSpoof = !checkKernelArgument("-rmbnopcirev");
+ 	KernelPatcher::RouteRequest reqs[] {
++		{"__ZN11IOPCIDevice19extendedConfigRead8Ey", wrapPciRead8, orgPciRead8},
+ 		{"__ZN11IOPCIDevice20extendedConfigRead16Ey", wrapPciRead16, orgPciRead16},
+ 		{"__ZN11IOPCIDevice20extendedConfigRead32Ey", wrapPciRead32, orgPciRead32},
+ 	};
+diff --git a/src/RembrandtGfx/probe.cpp b/src/RembrandtGfx/probe.cpp
+index 12c5f85..fa4e5da 100644
+--- a/src/RembrandtGfx/probe.cpp
++++ b/src/RembrandtGfx/probe.cpp
+@@ -79,6 +79,7 @@ uint64_t wrapUpdateHWInfoClocks(uint64_t self, uint64_t b, uint64_t c, uint64_t
+ // SDMA0_GB_ADDR_CONFIG back to its 0x444 reset value; re-sync it after every reset.
+ uint64_t wrapSdmaReset(uint64_t self, uint64_t ring, uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+ 	LOG("sdma-reset: ring type %llu", ring);
++	vcnHangDump("sdma-reset");
+ 	auto r = reinterpret_cast<Fn6>(orgSdmaReset)(self, ring, c, d, e, f);
+ 	syncSdmaAddrConfig("after SDMA reset");
+ 	return r;
+@@ -86,6 +87,7 @@ uint64_t wrapSdmaReset(uint64_t self, uint64_t ring, uint64_t c, uint64_t d, uin
+ 
+ uint64_t wrapResetHardware(uint64_t self, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t f) {
+ 	LOG("hw-reset: resetHardware(%llx)", b);
++	vcnHangDump("hw-reset");
+ 	auto r = reinterpret_cast<Fn6>(orgResetHardware)(self, b, c, d, e, f);
+ 	syncSdmaAddrConfig("after resetHardware");
+ 	return r;
+diff --git a/src/RembrandtGfx/rmb.hpp b/src/RembrandtGfx/rmb.hpp
+index 449dab5..57076b4 100644
+--- a/src/RembrandtGfx/rmb.hpp
++++ b/src/RembrandtGfx/rmb.hpp
+@@ -124,6 +124,17 @@ void smuRoute(KernelPatcher &patcher, size_t index, mach_vm_address_t address, s
+ 
+ // GC firmware substitution (Navi 23 microcode descriptors -> embedded Rembrandt images).
+ void firmwareRoute(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size);
++void wakeCrumb(uint8_t stage);
++void wakeCrumbReport();
++bool vcnEnabled();
++bool vcnArmMode();
++bool vcnArmFileConsume();
++void vcnEnableMmContexts();
++void vcnMmMirror(const char *why);
++void vcnStartSdmaWatch();
++bool gartRead(uint64_t va, uint32_t *out, uint32_t n);
++void vcnRouteAccel(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size);
++void vcnRoute(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size);
+ 
+ // VRAM probes (framebuffer memory size, accelerator AMDHWMemory).
+ void probeRouteFramebuffer(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size);
+@@ -136,6 +147,9 @@ void ptScanInit(KernelPatcher &patcher);
+ void ptScan(const char *why);
+ void ptScanVmid(uint32_t vmid, bool quietIfSame = false);
+ uint64_t ptVmidBase(uint32_t vmid);
++void rmbDumpGpuVa(const char *what, uint32_t vmid, uint64_t va, uint32_t n);
++void rmbDumpMmVa(const char *what, uint32_t vmid, uint64_t va, uint32_t n);
++void vcnHangDump(const char *why);
+ void mmhubDump(const char *why);  // 0 when the context is disabled
+ void gartCensus(const char *when);
+ // Save the GART at S3 entry; on wake put back PTEs that were valid then and are zero now.
+diff --git a/src/RembrandtGfx/sleep.cpp b/src/RembrandtGfx/sleep.cpp
+index bb571a0..a1272a7 100644
+--- a/src/RembrandtGfx/sleep.cpp
++++ b/src/RembrandtGfx/sleep.cpp
+@@ -19,7 +19,59 @@ static void wrapUpdatePreventSystemSleepList(void *root, IOService *svc, bool ad
+ 	FunctionCast(wrapUpdatePreventSystemSleepList, orgUpdatePreventSystemSleepList)(root, svc, add);
+ }
+ 
++// ---- Wake breadcrumbs (M8 S3 debugging): a stage byte in RTC CMOS RAM (ports 0x70/0x71, index
++// 0x58, sequence count at 0x59), which survives the forced power cycle after a failed wake; the next
++// boot logs "wakecrumb: last stage ..." and resets it to 0xB0.
++//   0x51 WillSleep seen     0x52 entering acpi_sleep_kernel     0x53 acpi_sleep_kernel returned
++//   0x54 dark wake / CPU back message     0x55 HasPoweredOn
++static uint8_t cmosRead(uint8_t idx) {
++	uint8_t v;
++	asm volatile("outb %%al, $0x70" : : "a"(idx));
++	asm volatile("inb $0x71, %%al" : "=a"(v));
++	return v;
++}
++static void cmosWrite(uint8_t idx, uint8_t v) {
++	asm volatile("outb %%al, $0x70" : : "a"(idx));
++	asm volatile("outb %%al, $0x71" : : "a"(v));
++}
++void wakeCrumb(uint8_t stage) {
++	uint8_t seq = cmosRead(0x59);
++	cmosWrite(0x58, stage);
++	cmosWrite(0x59, static_cast<uint8_t>(seq + 1));
++}
++
++static mach_vm_address_t orgAcpiSleepKernel;
++static void wrapAcpiSleepKernel(void *func, void *refcon) {
++	wakeCrumb(0x52);
++	FunctionCast(wrapAcpiSleepKernel, orgAcpiSleepKernel)(func, refcon);
++	wakeCrumb(0x53);
++}
++
++uint8_t gCrumbStage, gCrumbSeq;
++bool gCrumbHooked;
++// Called again later in boot (accelerator load): the first lines are too early for the disk log.
++void wakeCrumbReport() {
++	LOG("wakecrumb: previous boot ended at stage %02x seq %02x (acpi_sleep_kernel hook %s)", gCrumbStage, gCrumbSeq,
++	    gCrumbHooked ? "on" : "FAILED");
++}
++
++static void wakeCrumbRoute(KernelPatcher &patcher) {
++	gCrumbStage = cmosRead(0x58), gCrumbSeq = cmosRead(0x59);
++	LOG("wakecrumb: last stage %02x seq %02x", gCrumbStage, gCrumbSeq);
++	cmosWrite(0x58, 0xB0);
++	cmosWrite(0x59, 0);
++	KernelPatcher::RouteRequest req {"_acpi_sleep_kernel", wrapAcpiSleepKernel, orgAcpiSleepKernel};
++	if (!patcher.routeMultiple(KernelPatcher::KernelID, &req, 1))
++		LOG("wakecrumb: failed to route acpi_sleep_kernel (err %d)", patcher.getError());
++	else {
++		gCrumbHooked = true;
++		LOG("wakecrumb: acpi_sleep_kernel hooked");
++	}
++	patcher.clearError();
++}
++
+ void sleepRoute(KernelPatcher &patcher) {
++	wakeCrumbRoute(patcher);
+ 	if (checkKernelArgument("-rmbsvgaveto"))
+ 		return;
+ 	KernelPatcher::RouteRequest req {"__ZN14IOPMrootDomain28updatePreventSystemSleepListEP9IOServiceb",
+diff --git a/src/RembrandtGfx/smu.cpp b/src/RembrandtGfx/smu.cpp
+index 3341742..c6caed4 100644
+--- a/src/RembrandtGfx/smu.cpp
++++ b/src/RembrandtGfx/smu.cpp
+@@ -19,6 +19,8 @@ enum : uint32_t {
+ 	PPSMC_MSG_GetSmuVersion = 0x02,
+ 	PPSMC_MSG_GfxDeviceDriverReset = 0x11,
+ 	PPSMC_MSG_DisallowGfxOff = 0x1A,
++	PPSMC_MSG_PowerUpVcn = 0x07,   // VCN is power gated by default
++	PPSMC_MSG_PowerUpJpeg = 0x22,  // JPEG too
+ };
+ 
+ bool waitResp(uint32_t &resp, int ms = 1000) {
+@@ -110,6 +112,15 @@ uint64_t smuHwInit(uint64_t handle, uint64_t in, uint64_t out, uint64_t, uint64_
+ 	// Keep GFX powered while the PSP/RLC/GC bring-up below us pokes its registers.
+ 	uint32_t arg = 0;
+ 	LOG("smu_hw_init: DisallowGfxOff resp %u", sendMsg(PPSMC_MSG_DisallowGfxOff, arg));
++	// -rmbvcn (M8 experiment): PowerPlay's VCN power-up request goes to our stub ops, so the engine
++	// stays gated and its firmware load / ring tests hang. Ungate VCN and JPEG up front (Linux
++	// yellow_carp_dpm_set_vcn_enable / _jpeg_enable send these with argument 0).
++	if (vcnEnabled()) {
++		arg = 0;
++		LOG("smu_hw_init: PowerUpVcn resp %u", sendMsg(PPSMC_MSG_PowerUpVcn, arg));
++		arg = 0;
++		LOG("smu_hw_init: PowerUpJpeg resp %u", sendMsg(PPSMC_MSG_PowerUpJpeg, arg));
++	}
+ 	applyGcGolden();
+ 	startGoldenGuard();
+ 	dmubPollerStart();
+diff --git a/src/RembrandtGfx/vmwatch.cpp b/src/RembrandtGfx/vmwatch.cpp
+index 268b659..9cc94a8 100644
+--- a/src/RembrandtGfx/vmwatch.cpp
++++ b/src/RembrandtGfx/vmwatch.cpp
+@@ -16,9 +16,13 @@ uint32_t gc(uint32_t off) { return mmioRead(GC0 + off); }
+ 
+ // Registers (gc_10_3_0): per-context CNTL at 0x15fc + vmid; PT base/start/end LO32/HI32 pairs.
+ constexpr uint32_t FaultStatus = 0x15c8, FaultLo = 0x15c9, FaultHi = 0x15ca, FaultCntl = 0x15c4, FbOffset = 0x16e7;
+-uint32_t ctxCntl(uint32_t v) { return 0x15fc + v; }
+-uint32_t ptBaseLo(uint32_t v) { return 0x1667 + 2 * v; }
+-uint32_t ptStartLo(uint32_t v) { return 0x1687 + 2 * v; }
++// gWalkMm: walk the MM hub's contexts (MMHUB 2.3 at 0x1A000: CNTL 0x740+n, PT base 0x940+8n, start +2)
++// instead of the GC hub's; only rmbDumpMmVa sets it (diagnostics).
++bool gWalkMm;
++constexpr uint32_t MmRel = 0x1A000 - GC0;
++uint32_t ctxCntl(uint32_t v) { return gWalkMm ? MmRel + 0x740 + v : 0x15fc + v; }
++uint32_t ptBaseLo(uint32_t v) { return gWalkMm ? MmRel + 0x940 + 8 * v : 0x1667 + 2 * v; }
++uint32_t ptStartLo(uint32_t v) { return gWalkMm ? MmRel + 0x942 + 8 * v : 0x1687 + 2 * v; }
+ 
+ uint64_t reg64(uint32_t lo) { return (uint64_t)gc(lo + 1) << 32 | gc(lo); }
+ 
+@@ -307,6 +311,14 @@ void watch(void *, wait_result_t) {
+ 
+ }  // namespace
+ 
++// Exported for vcn.cpp (dumpGpuVa itself is file-local).
++void rmbDumpGpuVa(const char *what, uint32_t vmid, uint64_t va, uint32_t n) { dumpGpuVa(what, vmid, va, n); }
++void rmbDumpMmVa(const char *what, uint32_t vmid, uint64_t va, uint32_t n) {
++	gWalkMm = true;
++	dumpGpuVa(what, vmid, va, n);
++	gWalkMm = false;
++}
++
+ // GART (VMID 0) page-table census through BAR0: does the table in the carve-out survive guest S3 +
+ // host S3? (Apple's Navi 23 code expects VRAM to stay in self-refresh like BACO and never rebuilds
+ // its fixed kernel mappings; after every wake the KIQ faulted on a zero PTE.) Also samples the

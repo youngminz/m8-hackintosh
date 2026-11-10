@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>AV1AMDDecoder</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.m8.AV1AMDDecoder</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>AV1AMDDecoder</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CMClassImplementations</key>
+	<array>
+		<dict>
+			<key>CMClassID</key>
+			<string>com.apple.videotoolbox.videodecoder</string>
+			<key>CMClassImplementationID</key>
+			<string>local.m8.videodecoder.av1.amd</string>
+			<key>CMClassImplementationName</key>
+			<string>AMD VCN AV1 HW Decoder</string>
+			<key>CMClassImplementationVersion</key>
+			<integer>1</integer>
+			<key>CMDependencies</key>
+			<dict>
+				<key>IORegistryRequiredKey</key>
+				<string>IOGVACodec</string>
+			</dict>
+			<key>CMExecutableArchitectures</key>
+			<array>
+				<string>x86_64</string>
+			</array>
+			<key>CMFactoryFunction</key>
+			<string>AV1AMD_CreateInstance</string>
+			<key>CMManufacturer</key>
+			<string>m8-hackintosh</string>
+			<key>CMMatchingInfo</key>
+			<dict>
+				<key>VTCodecType</key>
+				<string>av01</string>
+				<key>VTIsHardwareAccelerated</key>
+				<true/>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

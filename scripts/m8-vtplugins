@@ -1,0 +1,67 @@
+#!/bin/bash
+# AV1 hardware decode plug-in for VideoToolbox on the M8 (run as root on the M8).
+#
+# VideoToolbox only loads decoder bundles without an Apple signature from /System/Library/Video/Plug-Ins
+# (CoreMedia checks kFigRegistryAppleCodeSignRequirement for /Library/Video/Plug-Ins). That folder is on
+# the sealed system volume, so instead of touching it this mounts a read-only disk image over it that
+# holds copies of the system's own plug-ins plus AV1AMDDecoder.bundle.
+#
+#   m8-vtplugins build BUNDLE   rebuild the image from the real system folder + BUNDLE, then mount it
+#   m8-vtplugins mount          mount the image (what the LaunchDaemon runs at boot)
+#   m8-vtplugins unmount        back to the stock plug-ins
+#   m8-vtplugins install        install this script and the LaunchDaemon
+#   m8-vtplugins uninstall      unmount, remove the LaunchDaemon and the image
+# Rebuild after a macOS update (the copies of Apple's plug-ins go stale).
+set -e
+[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+DIR="/Library/Application Support/m8-vtplugins"
+IMG="$DIR/vtplugins.dmg"
+MP=/System/Library/Video/Plug-Ins
+PLIST=/Library/LaunchDaemons/local.m8.vtplugins.plist
+mounted() { mount | grep -q " on $MP (hfs"; }
+case "$1" in
+build)
+    [ -d "$2/Contents/MacOS" ] || { echo "usage: $0 build AV1AMDDecoder.bundle"; exit 1; }
+    mounted && hdiutil detach -quiet "$MP"
+    mkdir -p "$DIR"; rm -f "$IMG"
+    SIZE=$(( $(du -sm "$MP" | cut -f1) * 3 + 16 ))
+    hdiutil create -quiet -size ${SIZE}m -fs HFS+ -volname VTPlugIns "$IMG"
+    T=$(mktemp -d)
+    hdiutil attach -quiet -nobrowse -owners on -mountpoint "$T" "$IMG"
+    cp -Rp "$MP/" "$T/"
+    cp -R "$2" "$T/"; chown -R root:wheel "$T/$(basename "$2")"
+    sw_vers -buildVersion > "$T/.built-for"
+    hdiutil detach -quiet "$T"; rmdir "$T"
+    "$0" mount ;;
+mount)
+    mounted && { echo "already mounted"; exit 0; }
+    [ -f "$IMG" ] || { echo "no image; run build first"; exit 1; }
+    hdiutil attach -quiet -nobrowse -readonly -owners on -mountpoint "$MP" "$IMG"
+    if [ "$(cat "$MP/.built-for" 2>/dev/null)" != "$(sw_vers -buildVersion)" ]; then
+        echo "image was built for another macOS build; unmounting (rebuild it)"; hdiutil detach -quiet "$MP"; exit 1
+    fi
+    echo "mounted: $(ls "$MP" | wc -l | tr -d ' ') plug-ins" ;;
+unmount)
+    mounted && hdiutil detach "$MP" || echo "not mounted" ;;
+install)
+    install -o root -g wheel -m 755 "$0" /usr/local/sbin/m8-vtplugins
+    cat > "$PLIST" <<P
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>local.m8.vtplugins</string>
+	<key>ProgramArguments</key><array><string>/usr/local/sbin/m8-vtplugins</string><string>mount</string></array>
+	<key>RunAtLoad</key><true/>
+	<key>StandardOutPath</key><string>/var/log/m8-vtplugins.log</string>
+	<key>StandardErrorPath</key><string>/var/log/m8-vtplugins.log</string>
+</dict>
+</plist>
+P
+    chown root:wheel "$PLIST"; chmod 644 "$PLIST"
+    echo "installed $PLIST" ;;
+uninstall)
+    mounted && hdiutil detach "$MP"
+    rm -f "$PLIST" "$IMG" /usr/local/sbin/m8-vtplugins; echo "removed" ;;
+*) echo "usage: $0 build BUNDLE | mount | unmount | install | uninstall"; exit 1 ;;
+esac

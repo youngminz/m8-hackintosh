@@ -1,0 +1,26 @@
+#!/bin/bash
+# Root-owned installer (/usr/local/sbin/m8-apply-oc, sudoers NOPASSWD for this path only).
+# Installs /Users/user/m8/config.plist (and /Users/user/m8/RembrandtGfx, if present) onto the
+# OpenCore ESP (disk0s1). Backups: config-prev.plist, RembrandtGfx.prev. `m8-apply-oc reboot` reboots after.
+set -e
+[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+D=/Users/user/m8; NEW="$D/config.plist"; KEXT="$D/RembrandtGfx"
+[ -f "$NEW" ] && plutil -lint "$NEW" >/dev/null || { echo "missing or invalid $NEW"; exit 1; }
+diskutil mount disk0s1 >/dev/null
+MP=$(diskutil info disk0s1 | awk -F": *" "/Mount Point/{print \$2}")
+[ -d "$MP/EFI/OC" ] || { echo "ESP not mounted"; exit 1; }
+cp "$MP/EFI/OC/config.plist" "$MP/EFI/OC/config-prev.plist"
+cp "$NEW" "$MP/EFI/OC/config.plist"
+echo "config installed: $(shasum "$NEW" | cut -c1-12)"
+if [ -f "$KEXT" ]; then
+  B="$MP/EFI/OC/Kexts/RembrandtGfx.kext/Contents/MacOS"
+  cp "$B/RembrandtGfx" "$MP/EFI/OC/RembrandtGfx.prev"
+  cp "$KEXT" "$B/RembrandtGfx"
+  echo "RembrandtGfx installed: $(shasum "$KEXT" | cut -c1-12)"
+  mv "$KEXT" "$KEXT.installed"
+fi
+sync
+diskutil unmount force disk0s1 >/dev/null
+pmset -a hibernatemode 0 standby 0 autopoweroff 0
+[ "$1" = reboot ] && { echo "rebooting"; shutdown -r now; }
+exit 0

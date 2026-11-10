@@ -1,0 +1,6 @@
+tools/av1dec/av1dec
+tools/av1dec/vtav1test
+tools/av1dec/AV1AMDDecoder.bundle/
+*.o
+.DS_Store
+dl/
