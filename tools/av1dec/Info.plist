@@ -54,36 +54,6 @@
 				<true/>
 			</dict>
 		</dict>
-	<dict>
-			<key>CMClassID</key>
-			<string>com.apple.videotoolbox.videodecoder</string>
-			<key>CMClassImplementationID</key>
-			<string>local.m8.videodecoder.vp9.amd</string>
-			<key>CMClassImplementationName</key>
-			<string>AMD VCN VP9 HW Decoder</string>
-			<key>CMClassImplementationVersion</key>
-			<integer>1</integer>
-			<key>CMDependencies</key>
-			<dict>
-				<key>IORegistryRequiredKey</key>
-				<string>IOGVACodec</string>
-			</dict>
-			<key>CMExecutableArchitectures</key>
-			<array>
-				<string>x86_64</string>
-			</array>
-			<key>CMFactoryFunction</key>
-			<string>VP9AMD_CreateInstance</string>
-			<key>CMManufacturer</key>
-			<string>m8-hackintosh</string>
-			<key>CMMatchingInfo</key>
-			<dict>
-				<key>VTCodecType</key>
-				<string>vp09</string>
-				<key>VTIsHardwareAccelerated</key>
-				<true/>
-			</dict>
-		</dict>
 	</array>
 </dict>
 </plist>

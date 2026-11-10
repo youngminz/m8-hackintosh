@@ -29,7 +29,7 @@ int main(int argc, const char **argv) {
         if (getenv("BUNDLEDIR")) printf("VTRegisterVideoDecoderBundleDirectory = %d\n", (int)VTRegisterVideoDecoderBundleDirectory((__bridge CFURLRef)[NSURL fileURLWithPath:@(getenv("BUNDLEDIR")) isDirectory:YES]));
         if (!system && getenv("INFO")) VTRegisterVideoDecoderWithInfo('av01', (__bridge CFDictionaryRef)@{@"VTIsHardwareAccelerated": @YES}, AV1AMD_CreateInstance);
         else if (!system) VTRegisterVideoDecoder('av01', AV1AMD_CreateInstance);
-        // CODEC=vp09 SUPP=1: VP9 decoders are "supplemental"; a client has to ask for them first (WebKit does).
+        // SUPP=1 registers the codec as supplemental (a client has to ask for it first).
         const char *cn = getenv("CODEC") ? getenv("CODEC") : "av01";
         CMVideoCodecType codec = (CMVideoCodecType)((uint32_t)cn[0] << 24 | (uint32_t)cn[1] << 16 | (uint32_t)cn[2] << 8 | (uint32_t)cn[3]);
         if (getenv("SUPP")) VTRegisterSupplementalVideoDecoderIfAvailable(codec);

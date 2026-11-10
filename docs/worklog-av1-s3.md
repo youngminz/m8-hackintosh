@@ -137,3 +137,7 @@
 - 결과(1080p, SVT-AV1 10비트와 libvpx profile 2): 단독 디코더 20프레임, VideoToolbox 시스템 경로 30프레임 모두 ffmpeg `p010le` 출력과 md5 일치. 8비트도 그대로 동작.
 - VideoToolbox 디코더는 비트 깊이를 av1C의 시퀀스 헤더(AV1), vpcC의 6번째 바이트 상위 4비트(VP9)에서 읽어 화소 형식을 정한다.
 - 미확인: 10비트의 4K 이상, HDR 메타데이터 전달(색 공간 표시), Safari에서의 HDR 재생, 12비트(거부).
+
+## 2026-11-11: VP9 제거
+
+아래 VP9 하드웨어 디코딩은 시스템 경로(VTDecoderXPCService)와 단독 디코더에서는 동작했지만, 저장소에서 제거했다. Safari(WebKit GPU 프로세스)는 `com.apple.developer.videotoolbox.client-sandboxed-decoder` 권한이 있어 VideoToolbox가 VP9를 그 프로세스 안에서 디코딩하도록 하드코딩되어 있고(코덱 목록에 `vp09` 포함, AV1은 아님), 서명 없는 번들은 그 프로세스의 라이브러리 검증에 막혀 로드되지 못하고 소프트웨어(libvpx)로 떨어진다. 실제 쓰임인 Safari에서 실효가 없어 뺐다. 이 노트의 VP9 관련 서술은 당시 기록으로 그대로 남겨 둔다.
