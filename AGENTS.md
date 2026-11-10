@@ -28,6 +28,9 @@ AI 에이전트가 이 저장소를 읽고 사용자의 PC에서 같은 작업�
 5. **되돌릴 방법을 먼저 만든다.** ESP의 이전 설정과 이전 커널 확장을 백업하고(`m8-apply-oc`가 `config-prev.plist`, `RembrandtGfx.prev`로 남긴다), 부팅이 안 될 때 돌아갈 Ubuntu 라이브 USB를 꽂아 둔다.
 6. **설정은 하나씩 바꾼다.** 부팅 인자 하나, 패치 하나를 바꾸고 재부팅해 검증한다. 여러 개를 한꺼번에 바꾸면 원인을 가를 수 없다.
 7. **원격 작업 중 대상 PC가 잠들지 않게 한다.** 이 기기는 S3에서 깨어나지 못한다. `sudo pmset -a sleep 0`으로 시스템 잠자기를 끈다.
+8. **GPU가 멈춘 상태에서 웜 리부트하지 않는다.** 다음 부팅이 꼬인다. WindowServer 워치독 패닉(약 2분)을 기다리면 깨끗이 재부팅된다.
+9. **커널 확장을 빌드할 때마다 미정의 심볼을 확인한다.** 익명 네임스페이스 안의 심볼을 다른 파일에서 참조하면 로드되지 않고 사과 로고에서 멈춘다. `nm -u RembrandtGfx | grep "^__Z" | c++filt`의 출력이 비어 있어야 한다. Lilu로 같은 함수를 두 번 라우팅해도 패닉이 난다.
+10. **실험이 끝나면 권한을 되돌린다.** 비밀번호 없이 허용한 sudoers 항목과 설치 스크립트를 지우도록 사용자에게 안내한다.
 
 ## 단계 0: 준비와 설치
 
@@ -72,7 +75,7 @@ ssh <M8> 'ioreg -l -w0 | grep -E "MetalPluginName|IOClass.*GraphicsAccelerator"'
 
 목표: VideoToolbox가 H.264와 HEVC를 하드웨어로 디코딩한다.
 
-절차: 부팅 인자에 `-rmbvcn`을 넣는다. 필요한 수정은 `kext/vcn.cpp`에 들어 있고, 머리말에 원인 여섯 가지가 적혀 있다.
+절차: 부팅 인자에 `-rmbvcn`을 넣는다. 필요한 수정은 `kext/vcn.cpp`에 들어 있고, 머리말에 원인 여섯 가지가 적혀 있다. 레지스터 지도, 실패했던 접근, 디버깅 기법(레지스터 추적, 한 번만 켜는 모드, 멈춤 덤프)은 `docs/vcn-h264-hevc-bringup.md`에 있다. 다른 기기나 다른 빌드에서 VCN이 멈추면 그 문서의 기법부터 쓴다.
 
 검증: `tools/vtprobe`를 빌드해 올린다. H.264나 HEVC로 인코딩한 짧은 mp4가 필요하다(ffmpeg로 아무 영상이나 만들면 된다).
 
@@ -88,7 +91,7 @@ ssh <M8> './vtprobe query; ./vtprobe check test-hevc.mp4 60; ./vtprobe decode te
 - `check`가 하드웨어와 소프트웨어 출력의 밝기 차이를 낸다. 0에 가까워야 한다. 하드웨어 출력의 평균 밝기가 16 근처면 검은 화면이 나오는 것이다(`ENABLE_ADVANCED_DRIVER_MODEL` 문제를 의심한다).
 - `decode`가 초당 프레임 수를 낸다. 정확히 영상의 프레임률이나 30으로 나오면 완료 통지가 늦는 것이다. `stampPoll`이 설치됐는지 디스크 로그에서 `stamppoll: installed`를 찾는다. 이 기록에서는 수정 후 초당 120에서 150프레임이었다.
 
-실패 시: VCN이 멈추면 GPU 전체가 멈출 수 있다. `-rmbvcn`을 빼고 부팅하면 디코딩 없이 돌아간다.
+실패 시: VCN이 멈추면 GPU 전체가 멈출 수 있다. 이때 바로 재부팅하지 말고 워치독 패닉을 기다린다(규칙 8). `-rmbvcn`을 빼고 부팅하면 디코딩 없이 돌아간다. 부팅 자체가 안 되면 Ubuntu 라이브 USB로 들어가 ESP의 `RembrandtGfx.prev`와 `config-prev.plist`로 되돌린다.
 
 ## 단계 3: USB 오디오 팝핑
 
@@ -214,6 +217,7 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 | 파일 | 내용 |
 |---|---|
 | `docs/install.md` | 설치와 첫 부팅 절차 |
+| `docs/vcn-h264-hevc-bringup.md` | VCN 레지스터 지도, 헛다리, 디버깅 기법, 복구와 함정 |
 | `docs/worklog-av1-s3.md` | AV1 작업과 S3 실험의 시간순 기록, 수치, 막혔던 지점 |
 | `docs/avd-decode-command-layout.md` | AMD VA 드라이버의 디코드 명령 구조 |
 | `docs/avd-av1-picparam-layout.md` | AV1 처리기의 입력 구조체 |
