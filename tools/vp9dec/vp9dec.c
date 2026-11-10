@@ -164,6 +164,8 @@ static void decodeFrame(Vp9Parser *p, const uint8_t *data, uint32_t size) {
         return;
     }
     if (h.profile != 0 || h.bit_depth != 8) { printf("only profile 0 here\n"); failed = 1; return; }
+    // 32 tile columns (only possible at 8192 wide) decoded to a black frame with a success status; 16 work.
+    if (h.tile_cols_log2 > 4 && !getenv("VP9_ANY_TILES")) { printf("more than 16 tile columns: not supported\n"); failed = 1; return; }
     uint32_t padded = (size + 127) & ~127u;
     if (padded > BS_SIZE) { failed = 1; return; }
     memcpy(bsBuf, data, size); memset(bsBuf + size, 0, padded - size);

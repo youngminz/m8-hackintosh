@@ -233,6 +233,8 @@ static OSStatus decodeOne(Dec *d, const uint8_t *data, uint32_t size, CVPixelBuf
         return noErr;
     }
     if (h.profile != 0 || h.bit_depth != 8) return kVTVideoDecoderUnsupportedDataFormatErr;
+    // 32 tile columns (only possible at 8192 wide) decoded to a black frame with a success status; 16 work.
+    if (h.tile_cols_log2 > 4) return kVTVideoDecoderUnsupportedDataFormatErr;
     if (h.frame_width > d->width || h.frame_height > d->height) return kVTVideoDecoderBadDataErr;
     uint32_t padded = (size + 127) & ~127u;
     if (padded > BS_SIZE) return kVTVideoDecoderBadDataErr;
