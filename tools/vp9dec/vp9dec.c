@@ -47,6 +47,7 @@ static uint64_t (*orgCreate)(void *, void *);
 static uint64_t (*orgInitHW)(void *);
 static uint64_t (*orgSetMsg)(void *, void *, void *, void *, uint64_t, uint64_t);
 static int verbose = 1;
+static int bps = 1;  // bytes per sample in the output (2 for 10 bit, P010)
 
 // the frame being submitted (the hooks run inside ScheduleAVDCommands on this thread)
 static struct { const Vp9Frame *h; uint32_t bsSize; uint8_t refMap[8]; uint8_t cur; int ok, calls; } g;
@@ -70,7 +71,7 @@ static uint64_t hookInitHW(void *proc) {
     uint8_t *buf = P(P(ctx, 0x1d0), 0x98);
     uint32_t size = *(uint32_t *)(ctx + 0x1c8);
     if (verbose) printf("  init hw context: buffer %p size %#x (VP9 needs %#x)\n", buf, size, VP9_HW_CONTEXT_SIZE(0));
-    if (!buf || size < VP9_HW_CONTEXT_SIZE(0)) return orgInitHW(proc);
+    if (!buf || size < VP9_HW_CONTEXT_SIZE(1)) return orgInitHW(proc);
     memset(buf, 0, size);
     vp9_init_hw_context(buf);
     return 0;
@@ -110,7 +111,7 @@ static uint64_t hookSetMsg(void *proc, void *param, void *targetTex, void *info,
     dec->db_pitch = (g.h->frame_width + 63) & ~63u; dec->db_aligned_height = (g.h->frame_height + 63) & ~63u;
     dec->db_pitch_uv = 0;
     vp9_init_probs_buffer(prob);
-    vp9_fill_msg(&gMsgState, g.h, g.bsSize, g.refMap, g.cur, 0, (rvcn_dec_message_vp9_t *)codec, (rvcn_dec_vp9_probs_segment_t *)prob);
+    vp9_fill_msg(&gMsgState, g.h, g.bsSize, g.refMap, g.cur, bps == 2, (rvcn_dec_message_vp9_t *)codec, (rvcn_dec_vp9_probs_segment_t *)prob);
     g.ok = 1;
     return r;
 }
@@ -149,7 +150,7 @@ static void writeNv12(int slot, int w, int h) {
     for (int p = 0; p < 2; p++) {
         const uint8_t *base = CVPixelBufferGetBaseAddressOfPlane(pix[slot], p);
         size_t stride = CVPixelBufferGetBytesPerRowOfPlane(pix[slot], p);
-        for (int y = 0; y < (p ? h / 2 : h); y++) fwrite(base + y * stride, 1, w, outFile);
+        for (int y = 0; y < (p ? h / 2 : h); y++) fwrite(base + y * stride, 1, (size_t)w * bps, outFile);
     }
     CVPixelBufferUnlockBaseAddress(pix[slot], kCVPixelBufferLock_ReadOnly);
 }
@@ -163,7 +164,7 @@ static void decodeFrame(Vp9Parser *p, const uint8_t *data, uint32_t size) {
         if (slot >= 0) { writeNv12(slot, p->ref[h.frame_to_show_map_idx].frame_width, p->ref[h.frame_to_show_map_idx].frame_height); shown++; }
         return;
     }
-    if (h.profile != 0 || h.bit_depth != 8) { printf("only profile 0 here\n"); failed = 1; return; }
+    if ((h.profile != 0 && h.profile != 2) || h.bit_depth > 10 || h.bit_depth != (bps == 2 ? 10 : 8)) { printf("only profile 0 (8 bit) and profile 2 (10 bit) here\n"); failed = 1; return; }
     // 32 tile columns (only possible at 8192 wide) decoded to a black frame with a success status; 16 work.
     if (h.tile_cols_log2 > 4 && !getenv("VP9_ANY_TILES")) { printf("more than 16 tile columns: not supported\n"); failed = 1; return; }
     uint32_t padded = (size + 127) & ~127u;
@@ -174,7 +175,7 @@ static void decodeFrame(Vp9Parser *p, const uint8_t *data, uint32_t size) {
     static Av1Seq seq; static Av1Frame fr;
     if (!T) T = calloc(1, 0x8014 + 16);
     memset(&seq, 0, sizeof seq); memset(&fr, 0, sizeof fr); memset(F, 0, sizeof F); memset(T, 0, 0x8014);
-    seq.bit_depth = 8; seq.max_frame_width = h.frame_width; seq.max_frame_height = h.frame_height; seq.num_planes = 3;
+    seq.bit_depth = h.bit_depth; seq.max_frame_width = h.frame_width; seq.max_frame_height = h.frame_height; seq.num_planes = 3;
     fr.frame_width = fr.upscaled_width = h.frame_width; fr.frame_height = h.frame_height; fr.superres_denom = 8;
     fr.tile_cols = fr.tile_rows = 1; fr.mi_cols = 2 * ((h.frame_width + 7) >> 3); fr.mi_rows = 2 * ((h.frame_height + 7) >> 3);
     fr.mi_col_starts[1] = fr.mi_cols; fr.mi_row_starts[1] = fr.mi_rows; fr.cdef_damping = 3; fr.show_frame = 1; fr.refresh_frame_flags = 0xff;
@@ -217,7 +218,12 @@ int main(int argc, char **argv) {
     if (sz < 32 || memcmp(d, "DKIF", 4) || memcmp(d + 8, "VP90", 4)) { fprintf(stderr, "not a VP9 ivf file\n"); return 1; }
     int w = d[12] | d[13] << 8, h = d[14] | d[15] << 8, want = atoi(argv[2]);
     if (argc > 3) outFile = fopen(argv[3], "wb");
-    printf("VP9 %dx%d\n", w, h);
+    {   // bit depth from the first frame header
+        Vp9Parser pp; Vp9Frame fh; vp9_parser_init(&pp);
+        uint32_t fsz0 = d[32] | d[33] << 8 | d[34] << 16 | (uint32_t)d[35] << 24, off0[VP9_MAX_SUPERFRAME], fs0[VP9_MAX_SUPERFRAME];
+        if (vp9_split_superframe(d + 44, fsz0, off0, fs0) && !vp9_parse_frame_header(&pp, d + 44 + off0[0], fs0[0], &fh)) bps = fh.bit_depth > 8 ? 2 : 1;
+    }
+    printf("VP9 %dx%d %d bit\n", w, h, bps == 2 ? 10 : 8);
     void *lib = dlopen("/System/Library/Extensions/AMDRadeonVADriver2.bundle/Contents/MacOS/AMDRadeonVADriver2", RTLD_NOW);
     uint32_t (*create)(void **, void *, void *) = lib ? dlsym(lib, "AVD_CreateAVDAccelerator") : NULL;
     if (!create) { fprintf(stderr, "no AMD VA driver\n"); return 1; }
@@ -248,7 +254,7 @@ int main(int argc, char **argv) {
         CFMutableDictionaryRef attrs = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         CFDictionaryRef empty = CFDictionaryCreate(NULL, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         CFDictionarySetValue(attrs, kCVPixelBufferIOSurfacePropertiesKey, empty);
-        for (int i = 0; i < SLOTS; i++) if (CVPixelBufferCreate(NULL, w, h, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attrs, &pix[i])) return 1;
+        for (int i = 0; i < SLOTS; i++) if (CVPixelBufferCreate(NULL, w, h, bps == 2 ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attrs, &pix[i])) return 1;
         for (int i = 0; i < 8; i++) slotOfRef[i] = -1;
         static Vp9Parser parser; vp9_parser_init(&parser); vp9_msg_state_init(&gMsgState);
         for (long pos = 32; pos + 12 <= sz && shown < want && !failed;) {

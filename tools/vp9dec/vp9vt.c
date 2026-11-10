@@ -84,7 +84,7 @@ struct Top { uint32_t *seq, *frame; uint8_t curr_pic_idx, pad[7]; IOSurfaceRef o
 
 
 // ---- hooks
-typedef struct { const Vp9Frame *h; uint32_t bsSize; uint8_t refMap[8]; uint8_t cur; int ok; Vp9MsgState *st; } Cur;
+typedef struct { const Vp9Frame *h; uint32_t bsSize; uint8_t refMap[8]; uint8_t cur; int ok; Vp9MsgState *st; int p010; } Cur;
 static __thread Cur *tCur;   // set while this thread is inside a driver call made by a VP9 session
 static uint64_t (*orgCreate)(void *, void *);
 static uint64_t (*orgInitHW)(void *);
@@ -107,7 +107,7 @@ static uint64_t hookInitHW(void *proc) {
     uint8_t *ctx = ctxOf(proc);
     uint8_t *buf = P(P(ctx, 0x1d0), 0x98);
     uint32_t size = *(uint32_t *)(ctx + 0x1c8);
-    if (!buf || size < VP9_HW_CONTEXT_SIZE(0)) return orgInitHW(proc);
+    if (!buf || size < VP9_HW_CONTEXT_SIZE(1)) return orgInitHW(proc);
     memset(buf, 0, size);
     vp9_init_hw_context(buf);
     return 0;
@@ -139,7 +139,7 @@ static uint64_t hookSetMsg(void *proc, void *param, void *targetTex, void *info,
     dec->db_pitch = (c->h->frame_width + 63) & ~63u; dec->db_aligned_height = (c->h->frame_height + 63) & ~63u;
     dec->db_pitch_uv = 0;
     vp9_init_probs_buffer(prob);
-    vp9_fill_msg(c->st, c->h, c->bsSize, c->refMap, c->cur, 0, (rvcn_dec_message_vp9_t *)codec, (rvcn_dec_vp9_probs_segment_t *)prob);
+    vp9_fill_msg(c->st, c->h, c->bsSize, c->refMap, c->cur, c->p010, (rvcn_dec_message_vp9_t *)codec, (rvcn_dec_vp9_probs_segment_t *)prob);
     c->ok = 1;
     return r;
 }
@@ -165,7 +165,7 @@ typedef struct {
     VTVideoDecoderSession session;
     void **tbl, *driver, *context;
     uint8_t *bsBuf;
-    int width, height;
+    int width, height, bitDepth;
     Vp9Parser parser; Vp9MsgState msgState;
     CVPixelBufferRef pix[SLOTS];
     int slotOfRef[8];
@@ -232,7 +232,7 @@ static OSStatus decodeOne(Dec *d, const uint8_t *data, uint32_t size, CVPixelBuf
         if (slot >= 0) *shown = d->pix[slot];
         return noErr;
     }
-    if (h.profile != 0 || h.bit_depth != 8) return kVTVideoDecoderUnsupportedDataFormatErr;
+    if ((h.profile != 0 && h.profile != 2) || h.bit_depth != d->bitDepth) return kVTVideoDecoderUnsupportedDataFormatErr;
     // 32 tile columns (only possible at 8192 wide) decoded to a black frame with a success status; 16 work.
     if (h.tile_cols_log2 > 4) return kVTVideoDecoderUnsupportedDataFormatErr;
     if (h.frame_width > d->width || h.frame_height > d->height) return kVTVideoDecoderBadDataErr;
@@ -241,7 +241,7 @@ static OSStatus decodeOne(Dec *d, const uint8_t *data, uint32_t size, CVPixelBuf
     memcpy(d->bsBuf, data, size); memset(d->bsBuf + size, 0, padded - size);
     Av1Seq seq; Av1Frame fr;   // a minimal AV1 parameter set so the driver's own code runs
     memset(&seq, 0, sizeof seq); memset(&fr, 0, sizeof fr); memset(d->F, 0, sizeof d->F); memset(d->T, 0, 0x8014);
-    seq.bit_depth = 8; seq.max_frame_width = h.frame_width; seq.max_frame_height = h.frame_height; seq.num_planes = 3;
+    seq.bit_depth = h.bit_depth; seq.max_frame_width = h.frame_width; seq.max_frame_height = h.frame_height; seq.num_planes = 3;
     fr.frame_width = fr.upscaled_width = h.frame_width; fr.frame_height = h.frame_height; fr.superres_denom = 8;
     fr.tile_cols = fr.tile_rows = 1; fr.mi_cols = 2 * ((h.frame_width + 7) >> 3); fr.mi_rows = 2 * ((h.frame_height + 7) >> 3);
     fr.mi_col_starts[1] = fr.mi_cols; fr.mi_row_starts[1] = fr.mi_rows; fr.cdef_damping = 3; fr.show_frame = 1; fr.refresh_frame_flags = 0xff;
@@ -259,7 +259,7 @@ static OSStatus decodeOne(Dec *d, const uint8_t *data, uint32_t size, CVPixelBuf
     for (int i = 0; i < 8; i++) top.ref_frame_map[i] = 0x7f;
     for (int i = 0; i < 7; i++) top.frame_refs[i] = 0x7f;
     if (!top.output) return kVTAllocationFailedErr;
-    Cur cur = {&h, size, {0}, slot, 0, &d->msgState};
+    Cur cur = {&h, size, {0}, slot, 0, &d->msgState, d->bitDepth > 8};
     for (int i = 0; i < 8; i++) cur.refMap[i] = d->slotOfRef[i] < 0 ? VP9MSG_NO_REF : d->slotOfRef[i];
     struct Cmd cmd = {1, 0, 0x1000000, 4, 0, d->context, &top};
     struct Cmd *cmds[1] = {&cmd}; void *refcons[1] = {NULL};
@@ -288,10 +288,16 @@ static OSStatus startSession(VTVideoDecoderRef dec, VTVideoDecoderSession sessio
     d->session = session;
     CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(fmt);
     d->width = dim.width; d->height = dim.height;
+    // vpcC: version, flags[3], profile, level, bitDepth << 4 | chroma << 1 | range
+    d->bitDepth = 8;
+    CFDictionaryRef atoms = CMFormatDescriptionGetExtension(fmt, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms);
+    CFDataRef vpcC = atoms ? CFDictionaryGetValue(atoms, CFSTR("vpcC")) : NULL;
+    if (vpcC && CFGetTypeID(vpcC) == CFDataGetTypeID() && CFDataGetLength(vpcC) >= 7) d->bitDepth = CFDataGetBytePtr(vpcC)[6] >> 4;
+    if (d->bitDepth != 8 && d->bitDepth != 10) { LOG("unsupported bit depth %d", d->bitDepth); return kVTVideoDecoderUnsupportedDataFormatErr; }
     int r = avdOpen(d, d->width, d->height);
-    LOG("startSession %dx%d: AMD VA driver open = %d", d->width, d->height, r);
+    LOG("startSession %dx%d %d bit: AMD VA driver open = %d", d->width, d->height, d->bitDepth, r);
     if (r) return kVTVideoDecoderNotAvailableNowErr;
-    int fourcc = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    int fourcc = d->bitDepth > 8 ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
     CFNumberRef nf = CFNumberCreate(NULL, kCFNumberIntType, &fourcc), nw = CFNumberCreate(NULL, kCFNumberIntType, &d->width), nh = CFNumberCreate(NULL, kCFNumberIntType, &d->height);
     CFDictionaryRef empty = CFDictionaryCreate(NULL, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     const void *keys[] = {kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey, kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey};

@@ -17,7 +17,7 @@ static void cb(void *r, void *s, OSStatus st, VTDecodeInfoFlags f, CVImageBuffer
     size_t w = CVPixelBufferGetWidth(img), h = CVPixelBufferGetHeight(img);
     for (int p = 0; p < 2; p++) {
         const uint8_t *b = CVPixelBufferGetBaseAddressOfPlane(img, p); size_t stride = CVPixelBufferGetBytesPerRowOfPlane(img, p);
-        for (size_t y = 0; y < (p ? h / 2 : h); y++) fwrite(b + y * stride, 1, w, outFile);
+        for (size_t y = 0; y < (p ? h / 2 : h); y++) fwrite(b + y * stride, 1, w * (CVPixelBufferGetPixelFormatType(img) == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ? 2 : 1), outFile);
     }
     CVPixelBufferUnlockBaseAddress(img, kCVPixelBufferLock_ReadOnly);
 }

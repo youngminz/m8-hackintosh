@@ -40,6 +40,7 @@ static int slotOfRef[8];
 static int decoded, shown, wantShown, failed;
 static FILE *outFile;
 static double decodeMs, schedMs;
+static int bps = 1;  // bytes per sample in the output (2 for 10 bit, P010)
 
 static double nowMs(void) { static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb); return mach_absolute_time() * (double)tb.numer / tb.denom / 1e6; }
 
@@ -49,7 +50,7 @@ static void writeNv12(int slot, int w, int h) {
     for (int p = 0; p < 2; p++) {
         const uint8_t *base = CVPixelBufferGetBaseAddressOfPlane(pix[slot], p);
         size_t stride = CVPixelBufferGetBytesPerRowOfPlane(pix[slot], p);
-        for (int y = 0; y < (p ? h / 2 : h); y++) fwrite(base + y * stride, 1, w, outFile);
+        for (int y = 0; y < (p ? h / 2 : h); y++) fwrite(base + y * stride, 1, (size_t)w * bps, outFile);
     }
     CVPixelBufferUnlockBaseAddress(pix[slot], kCVPixelBufferLock_ReadOnly);
 }
@@ -130,7 +131,8 @@ int main(int argc, char **argv) {
     if (!probe.have_seq) { fprintf(stderr, "no sequence header\n"); return 1; }
     int w = probe.seq.max_frame_width, h = probe.seq.max_frame_height;
     printf("AV1 profile %d %dx%d %d bit\n", probe.seq.profile, w, h, probe.seq.bit_depth);
-    if (probe.seq.bit_depth != 8) { fprintf(stderr, "only 8 bit here\n"); return 1; }
+    if (probe.seq.bit_depth > 10 || probe.seq.mono_chrome || probe.seq.profile != 0) { fprintf(stderr, "only 8 and 10 bit 4:2:0 here\n"); return 1; }
+    bps = probe.seq.bit_depth > 8 ? 2 : 1;
 
     void *lib = dlopen("/System/Library/Extensions/AMDRadeonVADriver2.bundle/Contents/MacOS/AMDRadeonVADriver2", RTLD_NOW);
     uint32_t (*create)(void **, void *, void *) = lib ? dlsym(lib, "AVD_CreateAVDAccelerator") : NULL;
@@ -169,7 +171,7 @@ int main(int argc, char **argv) {
         CFDictionaryRef empty = CFDictionaryCreate(NULL, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         CFDictionarySetValue(attrs, kCVPixelBufferIOSurfacePropertiesKey, empty);
         for (int i = 0; i < SLOTS; i++)
-            if (CVPixelBufferCreate(NULL, w, h, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attrs, &pix[i])) { fprintf(stderr, "pixel buffer\n"); return 1; }
+            if (CVPixelBufferCreate(NULL, w, h, bps == 2 ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attrs, &pix[i])) { fprintf(stderr, "pixel buffer\n"); return 1; }
         for (int i = 0; i < 8; i++) slotOfRef[i] = -1;
         int pr = av1_parse_temporal_unit(&parser, d, sz, onFrame, NULL);
         printf("parse result %d; decoded %d frames, shown %d, %.1f ms per decoded frame (schedule %.1f ms)%s\n", pr, decoded, shown, decoded ? decodeMs / decoded : 0, decoded ? schedMs / decoded : 0, failed ? " (FAILED)" : "");

@@ -72,7 +72,7 @@ typedef struct {
     VTVideoDecoderSession session;
     void **tbl, *driver, *context;
     uint8_t *bsBuf;
-    int width, height;
+    int width, height, bitDepth;
     Av1Parser parser;
     CVPixelBufferRef pix[SLOTS];
     int slotOfRef[8];
@@ -144,6 +144,7 @@ static void onFrame(void *ctx, Av1Parser *p, const Av1Frame *f, const uint8_t *d
         return;
     }
     if (!f->num_tiles_found || f->upscaled_width > d->width || f->frame_height > d->height) { d->error = kVTVideoDecoderBadDataErr; return; }
+    if (p->seq.bit_depth != d->bitDepth || p->seq.mono_chrome || p->seq.profile != 0) { d->error = kVTVideoDecoderUnsupportedDataFormatErr; return; }
     memset(d->F, 0, sizeof d->F); memset(d->T, 0, 0x8014);
     fillSeq(d->S, &p->seq); fillFrame(d->F, &p->seq, f);
     uint32_t start = f->tile_offset[0], end = f->tile_offset[f->num_tiles_found - 1] + f->tile_size[f->num_tiles_found - 1];
@@ -198,15 +199,16 @@ static OSStatus startSession(VTVideoDecoderRef dec, VTVideoDecoderSession sessio
     if (av1C && CFGetTypeID(av1C) == CFDataGetTypeID() && CFDataGetLength(av1C) > 4)
         av1_parse_temporal_unit(&d->parser, CFDataGetBytePtr(av1C) + 4, CFDataGetLength(av1C) - 4, noFrame, d);
     if (d->parser.have_seq) {
-        if (d->parser.seq.bit_depth != 8 || d->parser.seq.mono_chrome || d->parser.seq.profile != 0) { LOG("unsupported: profile %d depth %d", d->parser.seq.profile, d->parser.seq.bit_depth); return kVTVideoDecoderUnsupportedDataFormatErr; }
+        if (d->parser.seq.bit_depth > 10 || d->parser.seq.mono_chrome || d->parser.seq.profile != 0) { LOG("unsupported: profile %d depth %d", d->parser.seq.profile, d->parser.seq.bit_depth); return kVTVideoDecoderUnsupportedDataFormatErr; }
         if (d->parser.seq.max_frame_width > dim.width) dim.width = d->parser.seq.max_frame_width;
         if (d->parser.seq.max_frame_height > dim.height) dim.height = d->parser.seq.max_frame_height;
     }
     d->width = dim.width; d->height = dim.height;
+    d->bitDepth = d->parser.have_seq ? d->parser.seq.bit_depth : 8;
     int r = avdOpen(d, d->width, d->height);
-    LOG("startSession %dx%d: AMD VA driver open = %d", d->width, d->height, r);
+    LOG("startSession %dx%d %d bit: AMD VA driver open = %d", d->width, d->height, d->bitDepth, r);
     if (r) return kVTVideoDecoderNotAvailableNowErr;
-    int fourcc = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    int fourcc = d->bitDepth > 8 ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
     CFNumberRef nf = CFNumberCreate(NULL, kCFNumberIntType, &fourcc), nw = CFNumberCreate(NULL, kCFNumberIntType, &d->width), nh = CFNumberCreate(NULL, kCFNumberIntType, &d->height);
     CFDictionaryRef empty = CFDictionaryCreate(NULL, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     const void *keys[] = {kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey, kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey};
