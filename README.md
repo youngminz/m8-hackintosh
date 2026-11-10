@@ -146,4 +146,7 @@ sudo ./scripts/m8-vtplugins install
 - RembrandtGfx 원 프로젝트: [winmax2-2022-6800u-hackintosh](https://github.com/caoshiyuan0211-blip/winmax2-2022-6800u-hackintosh) (GPL-2.0). `kext/`의 내용은 그 파생물이다.
 - [OpenCore](https://github.com/acidanthera/OpenCorePkg), [Lilu](https://github.com/acidanthera/Lilu), [AMD Vanilla 패치](https://github.com/AMD-OSX/AMD_Vanilla)
 - VCN 메시지 형식 대조: Mesa의 `ac_vcn_dec.h`, `radeon_vcn_dec.c`
-- 이 저장소는 GPL-2.0으로 배포한다(`LICENSE`).
+- 라이선스는 폴더에 따라 다르다.
+  - `kext/`: GPL-2.0 (`kext/LICENSE`). GPL-2.0인 원 프로젝트의 파생물이다.
+  - 그 밖의 전부(`tools/`, `scripts/`, `acpi/`, `configs/`, `docs/` 등): MIT (`LICENSE`).
+  - `configs/config.plist`에 든 커널 패치 목록은 AMD Vanilla 등 다른 프로젝트에서 온 것이고, 그 부분의 권리는 각 원저자에게 있다.
