@@ -2,6 +2,8 @@
 
 GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장 그래픽(Rembrandt)의 가속과 동영상 하드웨어 디코딩까지 살린 작업 기록이다. OpenCore 설정, 커널 확장 패치, 역분석 도구, 그리고 macOS에 없던 **AV1 하드웨어 디코딩**을 Safari 유튜브에서 쓰게 만든 VideoToolbox 디코더가 들어 있다.
 
+AI 에이전트에게 이 저장소를 주고 같은 작업을 시키려면 `AGENTS.md`부터 읽게 한다. 단계별 절차, 검증 명령, 실패 시 대응이 거기에 있다.
+
 이 저장소는 완성된 EFI 배포판이 아니다. 같은 기기나 같은 칩(Rembrandt, Radeon 660M과 680M)으로 작업하는 사람이 참고할 자료다. 대부분의 패치는 macOS 15.8.2의 드라이버 바이너리에 맞춰져 있어 다른 버전에서는 그대로 동작하지 않을 수 있다.
 
 ## 하드웨어
@@ -53,8 +55,9 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 
 ### 1. 설치와 첫 부팅
 
+- 설치는 Ventoy USB로 부팅한 Ubuntu 라이브에서 SSH로 진행했다. 실기기에서는 macOS 복구 이미지가 부팅되지 않아, Ubuntu에서 QEMU 가상 머신에 실기기 디스크 전체를 그대로 물려 설치한 뒤 같은 디스크를 실기기에서 부팅했다. 실제 명령과 스크립트는 `docs/install.md`에 있다.
 - OpenCore 1.0.5에 AMD 커널 패치(AMD Vanilla), Lilu 1.7.2, VirtualSMC 1.3.8, AmdTscSync 2.0.0, RestrictEvents 1.1.6, LucyRTL8125Ethernet 1.2.4, AppleMCEReporterDisabler를 쓴다.
-- 실기기에서 부팅이 멈추던 원인은 세 가지였다: MMIO 화이트리스트, NVMeFix(끔), MCE 리포터(차단).
+- 실기기에서 부팅이 멈추던 원인은 세 가지였다: MMIO 화이트리스트, NVMeFix(끔), MCE 리포터(차단용 설정만 든 커널 확장 `kext/AppleMCEReporterDisabler.kext`).
 - 그래픽은 RembrandtGfx(Lilu 플러그인)가 맡는다. macOS의 Navi 계열 드라이버(AMDRadeonX6000)를 Rembrandt에서 돌게 하는 커널 확장이고, 이 기기에서는 660M의 PCI 리비전을 Navi 23으로 보고하게 하는 패치를 더했다(`kext/rembrandtgfx-pci-revision.patch`).
 
 ### 2. H.264, HEVC 하드웨어 디코딩 (VCN)

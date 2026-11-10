@@ -34,7 +34,16 @@ AI 에이전트가 이 저장소를 읽고 사용자의 PC에서 같은 작업�
 
 ## 단계 0: 준비와 설치
 
-`docs/install.md`에 따로 정리했다. Ubuntu 라이브 USB로 부팅해 SSH로 접속하고, 하드웨어를 덤프하고, macOS를 설치하고, OpenCore EFI를 구성해 실기기로 부팅하기까지다.
+`docs/install.md`에 실제로 실행한 명령과 함께 정리했다. 흐름은 이렇다.
+
+1. Ventoy USB의 Ubuntu 라이브로 대상 PC를 부팅하고 SSH를 연다(`scripts/ventoy/`의 자동 시작 스크립트). 이후 모든 작업을 SSH로 한다.
+2. 하드웨어를 덤프한다(ACPI 표, `dmidecode`, `lspci`, `dmesg`). SSDT와 VBIOS, 설정 값의 근거가 된다.
+3. 대상 디스크를 ESP와 APFS용 파티션으로 나누고, ESP에 OpenCore와 macOS 복구 이미지(`macrecovery.py`)를 넣는다.
+4. 실기기에서 복구 이미지가 부팅되지 않았다. 그래서 Ubuntu에서 QEMU 가상 머신을 띄우고 **실기기 디스크 전체를 그대로 물려** 설치했다. 화면과 입력은 QMP 소켓으로 원격 조작한다.
+5. 같은 디스크를 실기기에서 OpenCore로 부팅한다. 실패하면 가상 머신으로 다시 부팅해 macOS 안의 로그를 읽는다.
+6. 실기기 첫 부팅 문제 네 가지를 순서대로 고친다: MMIO 화이트리스트, NVMeFix 끔, MCE 리포터 차단(`kext/AppleMCEReporterDisabler.kext`), PCI 리비전을 Navi 23 값으로 보고.
+
+사용자가 직접 해야 하는 것: USB 부팅, 가상 머신 안에서의 계정 생성과 원격 로그인 켜기.
 
 검증: 대상 PC가 macOS로 부팅되고 작업용 컴퓨터에서 SSH로 접속된다.
 
@@ -216,7 +225,7 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 
 | 파일 | 내용 |
 |---|---|
-| `docs/install.md` | 설치와 첫 부팅 절차 |
+| `docs/install.md` | 설치와 첫 부팅 절차(실제 명령, 가상 머신 실행 스크립트, 문제와 해결, 복구 절차) |
 | `docs/vcn-h264-hevc-bringup.md` | VCN 레지스터 지도, 헛다리, 디버깅 기법, 복구와 함정 |
 | `docs/worklog-av1-s3.md` | AV1 작업과 S3 실험의 시간순 기록, 수치, 막혔던 지점 |
 | `docs/avd-decode-command-layout.md` | AMD VA 드라이버의 디코드 명령 구조 |
