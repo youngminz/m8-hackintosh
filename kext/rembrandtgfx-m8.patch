@@ -261,10 +261,21 @@ index 449dab5..57076b4 100644
  void gartCensus(const char *when);
  // Save the GART at S3 entry; on wake put back PTEs that were valid then and are zero now.
 diff --git a/src/RembrandtGfx/sleep.cpp b/src/RembrandtGfx/sleep.cpp
-index bb571a0..a1272a7 100644
+index bb571a0..01490de 100644
 --- a/src/RembrandtGfx/sleep.cpp
 +++ b/src/RembrandtGfx/sleep.cpp
-@@ -19,7 +19,59 @@ static void wrapUpdatePreventSystemSleepList(void *root, IOService *svc, bool ad
+@@ -8,6 +8,10 @@
+ #include <IOKit/IOService.h>
+ #include <Headers/kern_api.hpp>
+ #include "rmb.hpp"
++#include <sys/vnode.h>
++#include <kern/thread.h>
++#include <sys/fcntl.h>
++#include <IOKit/IOMemoryDescriptor.h>
+ 
+ static mach_vm_address_t orgUpdatePreventSystemSleepList;
+ 
+@@ -19,7 +23,208 @@ static void wrapUpdatePreventSystemSleepList(void *root, IOService *svc, bool ad
  	FunctionCast(wrapUpdatePreventSystemSleepList, orgUpdatePreventSystemSleepList)(root, svc, add);
  }
  
@@ -273,42 +284,191 @@ index bb571a0..a1272a7 100644
 +// boot logs "wakecrumb: last stage ..." and resets it to 0xB0.
 +//   0x51 WillSleep seen     0x52 entering acpi_sleep_kernel     0x53 acpi_sleep_kernel returned
 +//   0x54 dark wake / CPU back message     0x55 HasPoweredOn
++// Ports 0x72/0x73 reach the full 256-byte RTC RAM (0x70 masks bit 7 as the NMI gate).
 +static uint8_t cmosRead(uint8_t idx) {
 +	uint8_t v;
-+	asm volatile("outb %%al, $0x70" : : "a"(idx));
-+	asm volatile("inb $0x71, %%al" : "=a"(v));
++	asm volatile("outb %%al, $0x72" : : "a"(idx));
++	asm volatile("inb $0x73, %%al" : "=a"(v));
 +	return v;
 +}
 +static void cmosWrite(uint8_t idx, uint8_t v) {
-+	asm volatile("outb %%al, $0x70" : : "a"(idx));
-+	asm volatile("outb %%al, $0x71" : : "a"(v));
++	asm volatile("outb %%al, $0x72" : : "a"(idx));
++	asm volatile("outb %%al, $0x73" : : "a"(v));
 +}
++// 2026-11-10: after a failed wake and a forced power cycle, 0x58/0x59 read back 3b/01, values this
++// code never writes, so the firmware uses those cells. The stage now goes to several cell pairs and
++// the whole RAM is dumped at the next boot to see which pairs survive.
++static const uint8_t kCrumbCells[] = {0x58, 0x4a, 0x6a, 0x7a, 0xca, 0xea};
++static bool gCrumbOn;  // -rmbwakecrumb: without it nothing here writes CMOS or the wake vector
 +void wakeCrumb(uint8_t stage) {
-+	uint8_t seq = cmosRead(0x59);
-+	cmosWrite(0x58, stage);
-+	cmosWrite(0x59, static_cast<uint8_t>(seq + 1));
++	if (!gCrumbOn)
++		return;
++	for (uint8_t c : kCrumbCells) {
++		uint8_t seq = cmosRead(c + 1);
++		cmosWrite(c, stage);
++		cmosWrite(c + 1, static_cast<uint8_t>(seq + 1));
++	}
++}
++
++// ---- Wake vector breadcrumbs. The firmware resumes the OS at the FACS waking vector, physical
++// 0x2000 (real_mode_bootstrap_base copied there, CS=0x200 IP=0). Its first 11 bytes are
++//   fa                             cli
++//   2e 67 66 0f 01 15 40 00 00 00  lgdt cs:[0x40]
++// and it ends with mov ecx,[0x2800]; jmp ecx (PROT_MODE_START, acpi_wake_prot).
++// Right before acpi_sleep_kernel this plants
++//   0x2000: jmp 0x2100
++//   0x2100: cli; stage 0x56 -> cells 4a/6a/7a; the lgdt; jmp 0x200b        (real mode reached)
++//   0x2180: stage 0x57 -> cells 4a/6a/7a; mov ecx, <old [0x2800]>; jmp ecx (protected mode reached)
++// and points [0x2800] at 0x2180. The kernel recopies 0x2000..0x204f and [0x2800] when it restarts
++// the other CPUs after a good wake, which removes the patch. Cell ea records the outcome of planting:
++// a1 planted, a0 unexpected bytes at 0x2000 (nothing written).
++static void physPut(IOPhysicalAddress at, const uint8_t *src, size_t n) {
++	for (size_t i = 0; i < n; i++)
++		IOMappedWrite8(at + i, src[i]);
++}
++static void wakeVectorPlant() {
++	static const uint8_t expect[] = {0xfa, 0x2e, 0x67, 0x66, 0x0f, 0x01, 0x15, 0x40, 0x00, 0x00, 0x00};
++	for (size_t i = 0; i < sizeof(expect); i++)
++		if (IOMappedRead8(0x2000 + i) != expect[i]) {
++			cmosWrite(0xea, 0xa0);
++			return;
++		}
++	static const uint8_t real[] = {
++		0xfa,
++		0xb0, 0x4a, 0xe6, 0x72, 0xb0, 0x56, 0xe6, 0x73,
++		0xb0, 0x6a, 0xe6, 0x72, 0xb0, 0x56, 0xe6, 0x73,
++		0xb0, 0x7a, 0xe6, 0x72, 0xb0, 0x56, 0xe6, 0x73,
++		0x2e, 0x67, 0x66, 0x0f, 0x01, 0x15, 0x40, 0x00, 0x00, 0x00,
++		0xe9, 0xe5, 0xfe,  // jmp 0x200b: next ip 0x126, rel16 = 0x0b - 0x126
++	};
++	uint8_t prot[] = {
++		0xb0, 0x4a, 0xe6, 0x72, 0xb0, 0x57, 0xe6, 0x73,
++		0xb0, 0x6a, 0xe6, 0x72, 0xb0, 0x57, 0xe6, 0x73,
++		0xb0, 0x7a, 0xe6, 0x72, 0xb0, 0x57, 0xe6, 0x73,
++		0xb9, 0, 0, 0, 0,  // mov ecx, old [0x2800]
++		0xff, 0xe1,        // jmp ecx
++	};
++	uint32_t old = IOMappedRead32(0x2800);
++	if (old == 0x2180) {  // already planted in an earlier, aborted sleep
++		cmosWrite(0xea, 0xa1);
++		return;
++	}
++	prot[25] = static_cast<uint8_t>(old), prot[26] = static_cast<uint8_t>(old >> 8);
++	prot[27] = static_cast<uint8_t>(old >> 16), prot[28] = static_cast<uint8_t>(old >> 24);
++	physPut(0x2100, real, sizeof(real));
++	physPut(0x2180, prot, sizeof(prot));
++	IOMappedWrite32(0x2800, 0x2180);
++	static const uint8_t jmp[] = {0xe9, 0xfd, 0x00};  // jmp 0x2100: next ip 3, rel16 = 0x100 - 3
++	physPut(0x2000, jmp, sizeof(jmp));
++	cmosWrite(0xea, 0xa1);
 +}
 +
 +static mach_vm_address_t orgAcpiSleepKernel;
 +static void wrapAcpiSleepKernel(void *func, void *refcon) {
 +	wakeCrumb(0x52);
++	if (gCrumbOn && !checkKernelArgument("-rmbnowakevec"))
++		wakeVectorPlant();
 +	FunctionCast(wrapAcpiSleepKernel, orgAcpiSleepKernel)(func, refcon);
 +	wakeCrumb(0x53);
 +}
 +
++// ---- Physical memory dump on request (firmware analysis). If /Users/user/m8/physdump-req holds
++// "<hex address> <hex length>", that range is written to /Users/user/m8/physdump.bin 20 s after the
++// accelerator loads. Used to pull AMI's exported HII database (NVRAM variable HiiDB = size, address).
++static uint64_t hexField(const char *&p) {
++	uint64_t v = 0;
++	while (*p == ' ' || *p == '\n' || *p == 'x' || *p == 'X')
++		p++;
++	for (;; p++) {
++		char c = *p;
++		if (c >= '0' && c <= '9')
++			v = v * 16 + (c - '0');
++		else if (c >= 'a' && c <= 'f')
++			v = v * 16 + (c - 'a' + 10);
++		else if (c >= 'A' && c <= 'F')
++			v = v * 16 + (c - 'A' + 10);
++		else
++			break;
++	}
++	return v;
++}
++static void physDumpThread(void *, wait_result_t) {
++	IOSleep(20000);
++	auto ctx = vfs_context_create(nullptr);
++	vnode_t vp = nullptr;
++	uint64_t addr = 0, len = 0;
++	if (!vnode_open("/Users/user/m8/physdump-req", FREAD, 0, 0, &vp, ctx)) {
++		char buf[48] {};
++		int resid = 0;
++		if (!vn_rdwr(UIO_READ, vp, buf, sizeof(buf) - 1, 0, UIO_SYSSPACE, 0, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx))) {
++			const char *p = buf;
++			addr = hexField(p);
++			len = hexField(p);
++		}
++		vnode_close(vp, FREAD, ctx);
++	}
++	if (addr && len && len <= 0x4000000) {
++		auto *md = IOMemoryDescriptor::withPhysicalAddress(static_cast<IOPhysicalAddress>(addr), static_cast<IOByteCount>(len), kIODirectionIn);
++		auto *map = md ? md->map() : nullptr;
++		if (map && !vnode_open("/Users/user/m8/physdump.bin", O_CREAT | O_TRUNC | FWRITE, 0644, 0, &vp, ctx)) {
++			auto *src = reinterpret_cast<char *>(map->getVirtualAddress());
++			int err = 0;
++			for (uint64_t off = 0; off < len && !err; off += 0x10000) {
++				int n = static_cast<int>(len - off < 0x10000 ? len - off : 0x10000), resid = 0;
++				err = vn_rdwr(UIO_WRITE, vp, src + off, n, static_cast<off_t>(off), UIO_SYSSPACE, IO_UNIT | IO_NOAUTH,
++				              vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++			}
++			vnode_close(vp, FWRITE, ctx);
++			LOG("physdump: %llx + %llx written, err %d", addr, len, err);
++		}
++		else
++			LOG("physdump: map or open failed for %llx + %llx", addr, len);
++		OSSafeReleaseNULL(map);
++		OSSafeReleaseNULL(md);
++	}
++	vfs_context_rele(ctx);
++}
++
 +uint8_t gCrumbStage, gCrumbSeq;
 +bool gCrumbHooked;
++static uint8_t gCmosDump[256];
 +// Called again later in boot (accelerator load): the first lines are too early for the disk log.
 +void wakeCrumbReport() {
-+	LOG("wakecrumb: previous boot ended at stage %02x seq %02x (acpi_sleep_kernel hook %s)", gCrumbStage, gCrumbSeq,
-+	    gCrumbHooked ? "on" : "FAILED");
++	LOG("wakecrumb: %s, previous boot ended at stage %02x seq %02x (acpi_sleep_kernel hook %s)", gCrumbOn ? "on" : "off",
++	    gCmosDump[0x4a], gCmosDump[0x4b], gCrumbHooked ? "on" : "FAILED");
++	thread_t th = nullptr;
++	if (kernel_thread_start(physDumpThread, nullptr, &th) == KERN_SUCCESS)
++		thread_deallocate(th);
++	for (size_t i = 0; i < sizeof(kCrumbCells); i++)
++		LOG("wakecrumb: cell %02x stage %02x seq %02x", kCrumbCells[i], gCmosDump[kCrumbCells[i]],
++		    gCmosDump[kCrumbCells[i] + 1]);
++	for (int r = 0; r < 256; r += 16) {
++		const uint8_t *d = gCmosDump + r;
++		LOG("wakecrumb: cmos %02x: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", r,
++		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
++	}
 +}
 +
 +static void wakeCrumbRoute(KernelPatcher &patcher) {
-+	gCrumbStage = cmosRead(0x58), gCrumbSeq = cmosRead(0x59);
++	for (int i = 0; i < 256; i++)
++		gCmosDump[i] = cmosRead(static_cast<uint8_t>(i));
++	gCrumbStage = gCmosDump[0x58], gCrumbSeq = gCmosDump[0x59];
 +	LOG("wakecrumb: last stage %02x seq %02x", gCrumbStage, gCrumbSeq);
-+	cmosWrite(0x58, 0xB0);
-+	cmosWrite(0x59, 0);
++	gCrumbOn = checkKernelArgument("-rmbwakecrumb");
++	for (uint8_t c : kCrumbCells) {
++		if (c == 0x58)  // the firmware owns 0x58/0x59
++			continue;
++		uint8_t v = gCmosDump[c];
++		bool mine = v == 0xB0 || (v >= 0x51 && v <= 0x57) || v == 0xa0 || v == 0xa1;
++		if (gCrumbOn) {
++			cmosWrite(c, 0xB0);
++			cmosWrite(c + 1, 0);
++		}
++		else if (mine) {  // leftovers of an earlier experiment: give the cells back as zero
++			cmosWrite(c, 0);
++			cmosWrite(c + 1, 0);
++		}
++	}
 +	KernelPatcher::RouteRequest req {"_acpi_sleep_kernel", wrapAcpiSleepKernel, orgAcpiSleepKernel};
 +	if (!patcher.routeMultiple(KernelPatcher::KernelID, &req, 1))
 +		LOG("wakecrumb: failed to route acpi_sleep_kernel (err %d)", patcher.getError());
@@ -325,10 +485,22 @@ index bb571a0..a1272a7 100644
  		return;
  	KernelPatcher::RouteRequest req {"__ZN14IOPMrootDomain28updatePreventSystemSleepListEP9IOServiceb",
 diff --git a/src/RembrandtGfx/smu.cpp b/src/RembrandtGfx/smu.cpp
-index 3341742..c6caed4 100644
+index 3341742..2cc2d5f 100644
 --- a/src/RembrandtGfx/smu.cpp
 +++ b/src/RembrandtGfx/smu.cpp
-@@ -19,6 +19,8 @@ enum : uint32_t {
+@@ -7,6 +7,11 @@
+ 
+ #include "rmb.hpp"
+ #include <IOKit/IOLib.h>
++#include <sys/sysctl.h>
++#include <sys/errno.h>
++#include <kern/thread.h>
++
++void vcnBoostStart();
+ 
+ namespace {
+ 
+@@ -19,6 +24,8 @@ enum : uint32_t {
  	PPSMC_MSG_GetSmuVersion = 0x02,
  	PPSMC_MSG_GfxDeviceDriverReset = 0x11,
  	PPSMC_MSG_DisallowGfxOff = 0x1A,
@@ -337,7 +509,7 @@ index 3341742..c6caed4 100644
  };
  
  bool waitResp(uint32_t &resp, int ms = 1000) {
-@@ -110,6 +112,15 @@ uint64_t smuHwInit(uint64_t handle, uint64_t in, uint64_t out, uint64_t, uint64_
+@@ -110,6 +117,16 @@ uint64_t smuHwInit(uint64_t handle, uint64_t in, uint64_t out, uint64_t, uint64_
  	// Keep GFX powered while the PSP/RLC/GC bring-up below us pokes its registers.
  	uint32_t arg = 0;
  	LOG("smu_hw_init: DisallowGfxOff resp %u", sendMsg(PPSMC_MSG_DisallowGfxOff, arg));
@@ -349,10 +521,135 @@ index 3341742..c6caed4 100644
 +		LOG("smu_hw_init: PowerUpVcn resp %u", sendMsg(PPSMC_MSG_PowerUpVcn, arg));
 +		arg = 0;
 +		LOG("smu_hw_init: PowerUpJpeg resp %u", sendMsg(PPSMC_MSG_PowerUpJpeg, arg));
++		vcnBoostStart();
 +	}
  	applyGcGolden();
  	startGoldenGuard();
  	dmubPollerStart();
+@@ -164,7 +181,123 @@ void smuExitReset(const char *tag) {
+ 	    mmioRead(0x1260 + 0x0da4), mmioRead(0x1260 + 0x0f48), mmioRead(RegResp));
+ }
+ 
++// ---- Runtime PMFW mailbox access: sysctl debug.rmb_smu (root writes, anyone reads).
++// Write (msg << 32) | arg to send one message; read back (response << 32) | result argument.
++// Only clock queries and clock limit messages are accepted (no resets or power down).
++namespace {
++IOLock *gSmuLock;
++uint64_t gSmuLast;
++
++bool smuMsgAllowed(uint32_t msg) {
++	switch (msg) {
++	case 0x01:  // TestMessage
++	case 0x02:  // GetSmuVersion
++	case 0x03:  // GetDriverIfVersion
++	case 0x08:  // SetHardMinVcn (VCLK MHz << 16 | DCLK MHz)
++	case 0x09:  // SetSoftMinGfxclk
++	case 0x12:  // GetEnabledSmuFeatures
++	case 0x13:  // SetHardMinSocclkByFreq
++	case 0x14:  // SetSoftMinFclk
++	case 0x15:  // SetSoftMinVcn
++	case 0x17:  // GetGfxclkFrequency
++	case 0x18:  // GetFclkFrequency
++	case 0x1B:  // SetSoftMaxGfxClk
++	case 0x1C:  // SetHardMinGfxClk
++	case 0x1D:  // SetSoftMaxSocclkByFreq
++	case 0x1E:  // SetSoftMaxFclkByFreq
++	case 0x1F:  // SetSoftMaxVcn
++	case 0x23:  // SetHardMinFclkByFreq
++	case 0x24:  // SetSoftMinSocclkByFreq
++		return true;
++	default:
++		return false;
++	}
++}
++
++int smuSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req) {
++	uint64_t in = 0;
++	int err = SYSCTL_OUT(req, &gSmuLast, sizeof(gSmuLast));
++	if (err || !req->newptr)
++		return err;
++	if ((err = SYSCTL_IN(req, &in, sizeof(in))))
++		return err;
++	uint32_t msg = static_cast<uint32_t>(in >> 32), arg = static_cast<uint32_t>(in);
++	if (!smuMsgAllowed(msg) || !gSmuLock)
++		return EPERM;
++	IOLockLock(gSmuLock);
++	uint32_t resp = sendMsg(msg, arg);
++	gSmuLast = (static_cast<uint64_t>(resp) << 32) | arg;
++	IOLockUnlock(gSmuLock);
++	LOG("smu: sysctl msg %#x arg %#x -> resp %u, arg %#x", msg, static_cast<uint32_t>(in), resp, arg);
++	return 0;
++}
++
++SYSCTL_PROC(_debug, OID_AUTO, rmb_smu, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_KERN, nullptr, 0,
++            smuSysctl, "Q", "RembrandtGfx PMFW mailbox: write (msg<<32)|arg, read (resp<<32)|arg");
++}  // namespace
++
++// ---- VCN clock floor while decoding (sysctl debug.rmb_vcnboost: 0 off, 1 auto (default), 2 always).
++// With a display lit, PMFW keeps VCLK/DCLK at the lowest level (400/400 MHz): 1080p HEVC decodes at
++// ~130 fps instead of ~330. Linux leaves VCN DPM to PMFW too; here we ask for a hard minimum while
++// the decode ring's write pointer moves, and drop it after BoostIdleMs without new work.
++namespace {
++constexpr uint32_t VcnRbWptr = 0x80e1;              // decode ring write pointer (see vcn.cpp vcnring)
++constexpr uint32_t BoostArg = (1600u << 16) | 1600; // PMFW clamps to the top level (1440/1284 MHz)
++constexpr int BoostPollMs = 100, BoostIdleMs = 3000;
++int gVcnBoost = 1;
++uint32_t gBoostOns;
++SYSCTL_INT(_debug, OID_AUTO, rmb_vcnboost, CTLFLAG_RW | CTLFLAG_KERN, &gVcnBoost, 0,
++           "RembrandtGfx VCN clock floor: 0 off, 1 while decoding, 2 always");
++SYSCTL_UINT(_debug, OID_AUTO, rmb_vcnboost_ons, CTLFLAG_RD | CTLFLAG_KERN, &gBoostOns, 0,
++            "RembrandtGfx VCN clock floor: times raised");
++
++bool setVcnFloor(bool on) {
++	uint32_t arg = on ? BoostArg : 0;
++	IOLockLock(gSmuLock);
++	auto resp = sendMsg(0x08, arg);  // SetHardMinVcn
++	IOLockUnlock(gSmuLock);
++	if (gBoostOns < 3 || !on)
++		LOG("vcnboost: %s (resp %u, clocks %u/%u MHz)", on ? "raised" : "released", resp, arg >> 16, arg & 0xffff);
++	return resp == 1;
++}
++
++void vcnBoostThread(void *, wait_result_t) {
++	bool on = false;
++	uint32_t last = mmioRead(VcnRbWptr);
++	int idleMs = 0;
++	for (;;) {
++		IOSleep(BoostPollMs);
++		uint32_t w = mmioRead(VcnRbWptr);
++		bool busy = w != last && w != 0xFFFFFFFF;
++		last = w;
++		idleMs = busy ? 0 : idleMs + BoostPollMs;
++		bool want = gVcnBoost == 2 || (gVcnBoost == 1 && idleMs < BoostIdleMs);
++		if (want != on && setVcnFloor(want)) {
++			on = want;
++			if (on)
++				gBoostOns++;
++		}
++	}
++}
++}  // namespace
++
++void vcnBoostStart() {
++	static bool started;
++	thread_t t;
++	if (started || !gSmuLock)
++		return;
++	sysctl_register_oid(&sysctl__debug_rmb_vcnboost);
++	sysctl_register_oid(&sysctl__debug_rmb_vcnboost_ons);
++	if (kernel_thread_start(vcnBoostThread, nullptr, &t) == KERN_SUCCESS) {
++		thread_deallocate(t);
++		started = true;
++		LOG("vcnboost: started (sysctl debug.rmb_vcnboost=%d)", gVcnBoost);
++	}
++}
++
+ void smuRoute(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
++	if (!gSmuLock && (gSmuLock = IOLockAlloc()))
++		sysctl_register_oid(&sysctl__debug_rmb_smu);
+ 	KernelPatcher::RouteRequest requests[] {
+ 		{"_smu_sw_init", smuSwInit},
+ 		{"_smu_hw_init", smuHwInit},
 diff --git a/src/RembrandtGfx/vmwatch.cpp b/src/RembrandtGfx/vmwatch.cpp
 index 268b659..9cc94a8 100644
 --- a/src/RembrandtGfx/vmwatch.cpp

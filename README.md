@@ -51,7 +51,7 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 | `configs/config-wakedebug.plist` | S3 디버깅용 (디스크 로그와 자세한 로그를 켠 것) |
 | `acpi/` | SSDT-PLUG, SSDT-EC-USBX |
 | `kext/` | RembrandtGfx 커널 확장에 대한 패치. [원 프로젝트](https://github.com/caoshiyuan0211-blip/winmax2-2022-6800u-hackintosh)의 `src/RembrandtGfx`에 적용한다 |
-| `scripts/` | ESP에 설정과 커널 확장을 설치하는 스크립트, AV1 플러그인 이미지 관리 스크립트 |
+| `scripts/` | ESP에 설정과 커널 확장을 설치하는 스크립트, AV1 플러그인 이미지 관리 스크립트, SMU 메시지 도구(`m8-smu`) |
 | `tools/vtprobe` | VideoToolbox 하드웨어 디코딩 여부와 출력 프레임 검증 |
 | `tools/avdprobe`, `tools/avdtrace` | AMD VA 드라이버 직접 호출과 호출 추적 |
 | `tools/av1dec` | AV1 헤더 파서, 단독 디코더, VideoToolbox 디코더 번들 |
@@ -151,6 +151,7 @@ ssh <M8> 'ioreg -l -w0 | grep -E "MetalPluginName|IOClass.*GraphicsAccelerator"'
 4. 가속기가 채우는 MM hub VM 레지스터 주소도 2.3으로 바꾼다.
 5. `MMMC_VM_MX_L1_TLB_CNTL`의 `ENABLE_ADVANCED_DRIVER_MODEL`이 꺼져 있어 출력이 검은 화면이었다. 이 비트를 켠다.
 6. 디코딩 완료 인터럽트가 가속기에 도착하지 않아 프레임당 16.7 또는 33.3ms가 걸렸다(초당 30프레임). 완료를 기다리는 것이 있으면 1ms마다 타임스탬프를 확인하는 스레드를 넣었다(`stampPoll`). 근본 원인은 아직 모른다. 이후 대조 시험(2026-11-11)에서는 stampPoll을 꺼도 33ms 멈춤이 재현되지 않았고, 켰을 때의 이득은 처리량 7에서 12%였다. 비용이 작아 켜 둔다.
+7. 화면이 켜져 있으면 전원 관리 펌웨어(SMU)가 VCN 클럭을 최저(VCLK/DCLK 400MHz)에 묶어 디코딩이 화면을 끈 상태의 절반 이하로 느려졌다. 디코딩 링에 작업이 들어오는 동안 SMU에 VCN 최소 클럭(`SetHardMinVcn`)을 최대로 걸고, 3초 유휴 후 푼다(`smu.cpp`의 vcnboost). `sysctl debug.rmb_vcnboost`로 0 끔, 1 자동(기본), 2 항상. 움직이는 배경화면은 VCN으로 계속 디코딩하므로 그 경우 화면이 켜져 있는 동안 하한이 계속 걸린다.
 
 목표: VideoToolbox가 H.264와 HEVC를 하드웨어로 디코딩한다.
 
@@ -168,7 +169,7 @@ ssh <M8> './vtprobe query; ./vtprobe check test-hevc.mp4 60; ./vtprobe decode te
 
 - `query`가 `h264 hardware decode: YES`, `hevc hardware decode: YES`를 낸다.
 - `check`가 하드웨어와 소프트웨어 출력의 밝기 차이를 낸다. 0에 가까워야 한다. 하드웨어 출력의 평균 밝기가 16 근처면 검은 화면이 나오는 것이다(`ENABLE_ADVANCED_DRIVER_MODEL` 문제를 의심한다).
-- `decode`가 초당 프레임 수를 낸다. 정확히 영상의 프레임률이나 30으로 나오면 완료 통지가 늦는 것이다. `stampPoll`이 설치됐는지 디스크 로그에서 `stamppoll: installed`를 찾는다. 1080p HEVC 기준으로 화면이 켜져 있으면 초당 약 120에서 130프레임, 꺼져 있으면 약 270에서 305프레임이 나온다. 화면 상태에 따라 2배 넘게 차이 나므로 같은 상태끼리 비교한다(원인은 미확인).
+- `decode`가 초당 프레임 수를 낸다. 정확히 영상의 프레임률이나 30으로 나오면 완료 통지가 늦는 것이다. `stampPoll`이 설치됐는지 디스크 로그에서 `stamppoll: installed`를 찾는다. 1080p HEVC 기준으로 초당 약 300에서 330프레임이 나온다. 화면이 켜진 상태에서 130프레임 근처면 클럭 하한이 걸리지 않은 것이다. `sysctl debug.rmb_vcnboost_ons`가 늘어나는지, `scripts/m8-smu`로 SMU 상태를 본다.
 
 실패 시: VCN이 멈추면 GPU 전체가 멈출 수 있다. 이때는 워치독 패닉(약 2분)을 기다리면 깨끗이 재부팅된다. `-rmbvcn`을 빼고 부팅하면 디코딩 없이 돌아간다. 부팅 자체가 안 되면 Ubuntu 라이브 USB로 들어가 ESP의 `RembrandtGfx.prev`와 `config-prev.plist`로 되돌린다.
 

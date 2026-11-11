@@ -1,0 +1,4 @@
+#!/bin/bash
+# smu.sh MSG [ARG] -> send one PMFW message through debug.rmb_smu, print "resp arg"
+sudo sysctl -q -w debug.rmb_smu=$(( ($1<<32) | ${2:-0} )) >/dev/null || { echo "rejected"; exit 1; }
+v=$(sysctl -n debug.rmb_smu); echo "$((v>>32)) $((v & 0xffffffff))"
