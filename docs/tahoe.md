@@ -1,0 +1,111 @@
+# macOS Tahoe 26.7.3 올리기 (2026-11-11)
+
+Sequoia 15.8.2가 돌아가는 M8에 Tahoe 26.7.3(25G342)을 **같은 APFS 컨테이너의 별도 볼륨**으로 설치해, 그래픽 가속이 붙은 상태로 쓸 수 있게 만든 기록이다. Sequoia는 그대로 두고 OpenCore 선택 화면에서 둘 중 하나를 고른다. ESP 설정은 하나(`configs/config.plist`)로 두 OS를 다 부팅한다.
+
+현재 상태:
+
+| 항목 | Tahoe 26.7.3 |
+|---|---|
+| 부팅, Metal 가속 | 동작 (로그인 후 GPU 오류 없음) |
+| 유선랜 | 동작 |
+| USB | 동작 (Tahoe용 핀 인터럽트 패치) |
+| H.264, HEVC, AV1 하드웨어 디코딩 | 꺼 둠. 소프트웨어 디코딩. VCN 훅의 오프셋을 Tahoe 드라이버에 맞추지 않았다 |
+| USB 오디오 끊김 | 미확인 |
+| 장시간 안정성 | 미확인 (로그인 후 수 분 확인) |
+
+## 1. 설치
+
+1. 같은 컨테이너에 볼륨을 만든다: `sudo diskutil apfs addVolume disk1 APFS Tahoe`.
+2. `softwareupdate --fetch-full-installer --full-installer-version 26.7.3`으로 설치 앱을 받는다.
+3. 설치 앱을 **창으로** 열고 대상 디스크로 `Tahoe`를 고른다. `startosinstall`에는 대상 볼륨을 고르는 옵션이 없다(지금 부팅한 볼륨을 업그레이드한다).
+4. 설치 기간에는 그래픽 kext 없이 부팅했다: `RembrandtGfx` 끔, GPU `DeviceProperties` 비움, 부팅 인자 `-v keepsyms=1 debug=0x100 ipc_control_port_options=0 -lilubetaall -amd_no_dgpu_accel`, `PlatformInfo > Generic > MaxBIOSVersion = true`. 그래픽 kext를 넣은 지금 설정으로도 설치가 되는지는 시험하지 않았다.
+
+## 2. 설치 단계에서 막힌 것
+
+### 2.1 `Still waiting for root device`
+
+설치 커널이 디스크를 찾지 못했다. 화면에는 NVMe가 레지스터를 전부 1로 읽은 흔적(`CAP != kNVMeInvalidRegisterValue64`)과 유선랜 드라이버의 `Unknown chipset`이 나왔다.
+
+원인: AMD 칩셋에서 10비트 PCIe 태그를 끄는 IOPCIFamily 패치(`probeBusGated | Disable 10 bit tags`)가 Tahoe에서 맞지 않았다. Sequoia는 `bt r14d, 0x11; jb`(장치가 10비트 태그를 지원하면 켜는 쪽으로 점프)인데, Tahoe는 같은 코드가 `bt ebx, 0x11; jae +0x4a`(지원하지 않으면 건너뛰기)로 분기가 뒤집혀 있다. 원래 패치의 Find(`e0117200`, 마스크 `f0fffff0`)는 `72`(jb)를 찾으므로 Tahoe에서는 적용되지 않고 넘어간다.
+
+Tahoe용 패치(Base `__ZN11IOPCIBridge13probeBusGatedEP14probeBusParams`, MinKernel 25.0.0):
+
+| | 바이트 |
+|---|---|
+| Find | `0f ba e0 11 73 00` |
+| Mask | `ff ff f0 ff ff 00` |
+| Replace | `00 00 00 00 eb 00` |
+| ReplaceMask | `00 00 00 00 ff 00` |
+
+`jae`를 무조건 점프로 바꿔 10비트 태그를 켜는 코드를 항상 건너뛴다.
+
+### 2.2 시간 역행 패치가 엉뚱한 곳을 고침
+
+`Visual | thread_invoke, thread_dispatch | Remove non-monotonic time panic`은 스레드 구조체의 필드 `0x488`을 쓰는 비교를 찾는다. Tahoe에서는 이 필드가 `0x490`으로 옮겨져, 첫 두 일치가 `_kperf_lazy_wait_sample`과 `_vmx_hv_support`(rdmsr 0x48b 뒤)에 걸렸다. 두 번째는 점프 명령을 반쯤 덮어써 코드를 깨뜨린다.
+
+Tahoe용: Find `48 2b 00 90 04 00 00 0f 00 00 00 00 00`, Mask `48 ef 00 f0 ff ff ff ff 00 00 00 00 00`(두 번째 바이트를 `2b`/`3b`로 좁혀 다른 함수를 제외), Replace는 원래 패치와 같다. Tahoe 커널에서 `_thread_block_reason`과 `_thread_dispatch`의 두 곳에만 처음 두 번 일치한다.
+
+원래 패치 두 개는 MaxKernel을 24.99.99로 내렸다.
+
+### 2.3 MSU 1013
+
+디스크를 찾은 뒤 설치 단계가 `ota-failure-reason = "MSU 1013 (Unable to load context options into context.)"`(`patchd_macos_load_update_plist`)로 포기하고 원래 OS로 돌아갔다. 같은 볼륨에 설치 앱을 다시 돌리자 통과했다. 첫 시도가 디스크를 못 찾고 강제 종료된 흔적으로 추정한다(미확인).
+
+## 3. 첫 설정 화면 건너뛰기
+
+그래픽 가속 없이 뜬 설정 화면은 화면 하나 그리는 데 수 초씩 걸려 쓸 수 없었다. Sequoia로 부팅해 Tahoe의 Data 볼륨(`/Volumes/Tahoe - Data`)을 직접 설정했다.
+
+```bash
+T="/Volumes/Tahoe - Data"; N="$T/private/var/db/dslocal/nodes/Default"
+sudo cp -p /private/var/db/dslocal/nodes/Default/users/<USER>.plist "$N/users/"   # 같은 UID, 같은 비밀번호
+sudo dscl -f "$N" localonly -append /Local/Target/Groups/admin GroupMembership <USER>
+sudo dscl -f "$N" localonly -append /Local/Target/Groups/admin GroupMembers <GeneratedUID>
+sudo ditto "/Volumes/Tahoe/System/Library/User Template/Non_localized" "$T/Users/<USER>"
+# ~/.ssh/authorized_keys 복사, chown -R <UID>:20
+sudo cp -p /etc/sudoers.d/* "$T/private/etc/sudoers.d/"
+sudo /usr/libexec/PlistBuddy -c "Add :com.openssh.sshd bool false" "$T/private/var/db/com.apple.xpc.launchd/disabled.plist"
+sudo cp -p /etc/ssh/ssh_host_* "$T/private/etc/ssh/"   # 호스트 키를 같게 해 known_hosts 충돌을 피한다
+sudo touch "$T/private/var/db/.AppleSetupDone"
+```
+
+시간대가 기본값으로 남으므로 Tahoe에서 `sudo systemsetup -settimezone Asia/Seoul`로 맞춘다.
+
+## 4. 그래픽 가속
+
+RembrandtGfx가 찾는 드라이버와 커널 심볼 194개가 모두 Tahoe에 같은 이름으로 있었다. `-lilubetaall`로 그대로 올리자 Metal 가속이 붙었다. 다만 처음에는 쓸 수 없을 만큼 느렸고 몇 분 뒤 멈췄다. 원인이 두 개였다.
+
+### 4.1 USB 인터럽트
+
+Tahoe 안에서 네트워크 왕복이 2에서 8초 걸렸다. 이 기기는 유선 연결과 키보드, 마우스가 모두 USB다. Sequoia용 xHCI 핀 인터럽트 패치(단계 3)를 Tahoe로 옮기자 4에서 5ms로 돌아왔다. `AppleUSBXHCIPCI::start`의 구조는 같고 점프 거리만 다르다.
+
+| | 바이트 |
+|---|---|
+| Find | `31 db 31 f6 ff 90 08 07 00 00 85 c0 0f 85 68 02 00 00` |
+| Replace | `31 db 31 f6 ff 90 08 07 00 00 85 c0 90 e9 68 02 00 00` |
+
+Tahoe 부트 커널 컬렉션에서 정확히 한 번 일치한다.
+
+### 4.2 동영상 엔진 시간 초과로 인한 GPU 재시작
+
+로그인 2분 뒤 WindowServer 워치독 패닉(`userspace watchdog timeout: no successful checkins from WindowServer`)이 났다. 스택 기록에서 WindowServer는 `AMDAccelEventMachine` 스레드를 기다렸고, 그 스레드는 `IOAccelEventMachine2::hardwareErrorEvent` → `restart_channel` → `AMDAccelChannel::resetHardwareAndReplay` → `waitForTimestamp` → `pollWait`에서 멈춰 있었다. 커널 로그에는 2초마다 이것이 찍혔다.
+
+```
+Timestamp 0x2 on channel 15 VCN0Dec is not expired; stamp: 0x0 -> 0x0; ... wait time 2102ms
+IOAccelEventMachine2::waitForStamp(...): a graphics error occurred, fRestartType = <2>
+```
+
+Tahoe에서는 VCN 훅(`kext/vcn.cpp`, macOS 15 오프셋)을 끄게 해 두었는데, 하드웨어 코덱 광고는 남아 있었다. 움직이는 배경화면 같은 앱이 응답하지 않는 VCN에 작업을 보내고, 2초마다 시간 초과와 GPU 재시작이 반복됐다. 화면이 몇 초씩 걸려 그려지던 것도 이것이다.
+
+수정: VCN이 꺼져 있으면(`vcnEnabled()`가 거짓) 코덱 광고를 숨기는 `noVideoEngine`을 돌린다. 전에는 부팅 인자 `-rmbvcn`만 보고 판단했다. 그 뒤 로그인 후에도 GPU 오류 0건, 정상 속도.
+
+## 5. 커널 확장의 Tahoe 처리 (`kext/`)
+
+- Darwin 25에서는 VCN 훅을 켜지 않는다. `-rmbvcntahoe`를 넣으면 시험 삼아 켤 수 있다.
+- VCN이 꺼지면 하드웨어 코덱을 숨긴다(VideoToolbox는 소프트웨어 코덱을 쓴다).
+- Darwin 25에서는 `-rmbnodisklog`를 무시하고 디스크 로그(`/private/var/log/rmb-msgbuf.log`)를 항상 남긴다. Tahoe가 멈추면 Sequoia로 부팅해 `/Volumes/Tahoe - Data/private/var/log/rmb-msgbuf.log`를 읽는다.
+
+## 6. 남은 것
+
+- VCN(H.264, HEVC, AV1 디코딩): `kext/vcn.cpp`의 구조체 오프셋과 `stampPoll`의 vtable 오프셋을 Tahoe의 AMDRadeonX6000에서 다시 찾아야 한다.
+- AV1 플러그인 이미지: Tahoe 빌드로 다시 만들고, VTVideoDecoder 구조체를 대조해야 한다.
+- USB 오디오 끊김과 장시간 안정성 확인.

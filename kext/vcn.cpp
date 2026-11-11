@@ -887,6 +887,9 @@ bool vcnEnabled() {
 	static int on = -1;
 	if (on < 0)
 		on = checkKernelArgument("-rmbvcn") || vcnArmMode() ? 1 : 0;
+	// Tahoe (Darwin 25) bring-up: the VCN hooks carry macOS 15 offsets, keep them off unless asked.
+	if (on && getKernelVersion() >= KernelVersion::Tahoe && !checkKernelArgument("-rmbvcntahoe"))
+		on = 0;
 	return on;
 }
 

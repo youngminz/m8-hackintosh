@@ -1,6 +1,6 @@
 # GMKtec M8 해킨토시 (Ryzen 5 PRO 6650H, Radeon 660M)
 
-GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장 그래픽(Rembrandt)의 가속과 동영상 하드웨어 디코딩까지 살린 작업 기록이다. OpenCore 설정, 커널 확장 패치, 역분석 도구, 그리고 macOS에 없던 **AV1 하드웨어 디코딩**을 VideoToolbox에 붙인 디코더가 들어 있다.
+GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장 그래픽(Rembrandt)의 가속과 동영상 하드웨어 디코딩까지 살린 작업 기록이다. 같은 디스크의 별도 볼륨에 macOS Tahoe 26.7.3도 올려 그래픽 가속까지 동작한다(동영상 하드웨어 디코딩은 Sequoia에서만, `docs/tahoe.md`). OpenCore 설정, 커널 확장 패치, 역분석 도구, 그리고 macOS에 없던 **AV1 하드웨어 디코딩**을 VideoToolbox에 붙인 디코더가 들어 있다.
 
 이 저장소는 완성된 EFI 배포판이 아니다. 같은 기기나 같은 칩(Rembrandt, Radeon 660M과 680M)으로 작업하는 사람이 참고할 자료다. 대부분의 패치는 macOS 15.8.2의 드라이버 바이너리에 맞춰져 있어 다른 버전에서는 그대로 동작하지 않을 수 있다.
 
@@ -29,6 +29,7 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 | 유선랜 | 동작 (LucyRTL8125Ethernet) |
 | S3 잠자기 | 안 됨. 잠들기는 되지만 펌웨어의 S3 복귀가 OS와 무관하게 고장나 깨어나지 못함(아래 단계 5). 잠자기를 꺼 두고 쓴다 |
 | JPEG 하드웨어 디코딩 | 안 됨 (커널 가속기에 JPEG 링이 없음) |
+| macOS Tahoe 26.7.3 (별도 볼륨) | 부팅, Metal 가속, 유선랜 동작. 동영상 하드웨어 디코딩은 꺼 둠. 아래 단계 6 |
 
 ### 확인한 해상도
 
@@ -299,6 +300,35 @@ S3 Enable로 바꾸면 펌웨어가 실제로 S3 모드로 전환된다(ACPI 표
 - 실험은 실패할 때마다 강제 전원 차단이 필요하다. 사람 없이 반복하려면 원격 전원 제어(스마트 플러그 + BIOS의 전원 복구 시 자동 켜짐)가 있어야 한다.
 - `wakecrumb`와 깨우기 벡터 기록, 물리 메모리 덤프는 커널 확장에 들어 있고 `-rmbwakecrumb` 부트인자가 있을 때만 동작한다(없으면 CMOS를 건드리지 않는다).
 
+## 단계 6: macOS Tahoe 26.7.3 (별도 볼륨)
+
+Sequoia 옆에 같은 APFS 컨테이너의 별도 볼륨으로 Tahoe를 설치했다. 같은 `configs/config.plist`로 둘 다 부팅하고, OpenCore 선택 화면에서 고른다. 자세한 경과와 바이트 값은 `docs/tahoe.md`에 있다.
+
+Tahoe에서 필요했던 것:
+
+1. **IOPCIFamily 10비트 태그 패치**: Tahoe에서는 분기가 뒤집혀(`bt ebx,0x11; jae`) 원래 패치가 적용되지 않는다. 그러면 NVMe와 유선랜이 레지스터를 전부 1로 읽고 설치 커널이 `Still waiting for root device`에서 멈춘다. `jae`를 무조건 점프로 바꾸는 Tahoe용 패치를 넣었다.
+2. **시간 역행 패닉 패치**: 스레드 필드가 `0x488`에서 `0x490`으로 옮겨져, 원래 패턴이 엉뚱한 함수(`_vmx_hv_support`)를 고친다. Tahoe용으로 다시 만들었다.
+3. **xHCI 핀 인터럽트 패치**: 구조는 같고 점프 거리만 다르다. 없으면 USB(유선랜 어댑터, 키보드, 마우스)가 몇 초씩 밀린다.
+4. **RembrandtGfx**: 심볼 이름은 Tahoe에서도 모두 같아 그대로 올라오고 Metal 가속이 붙는다. VCN 훅은 macOS 15 오프셋이라 Tahoe에서는 끄고, 이때 하드웨어 코덱 광고도 숨긴다. 숨기지 않으면 VCN 시간 초과로 GPU가 2초마다 재시작되다 WindowServer 워치독 패닉이 난다.
+
+원래 패치 세 개는 Darwin 24로 제한하고, Tahoe용은 Darwin 25로 제한했다.
+
+목표: Tahoe가 그래픽 가속이 붙은 상태로 부팅되고 GPU 오류가 없다.
+
+절차: 설치 앱을 창으로 열어 Tahoe 볼륨을 고른다(`startosinstall`은 대상 볼륨을 고를 수 없다). 설치 기간에는 그래픽 kext 없이 부팅했다. 첫 설정 화면은 가속 없이는 쓸 수 없어 Sequoia에서 Tahoe의 Data 볼륨에 계정과 SSH를 미리 넣고 건너뛰었다(`docs/tahoe.md` 3절).
+
+검증:
+
+```bash
+ssh <M8> 'sw_vers -productVersion; ioreg -l -w0 | grep -c AMDRadeonX6000MTLDriver; grep -cE "not expired|graphics error occurred" /private/var/log/rmb-msgbuf.log'
+```
+
+`26.7.3`, 1 이상, 그리고 오류 0이 나와야 한다. 디스크 로그는 이전 부팅 것도 이어 붙어 있으니, 이번 부팅 부분만 본다.
+
+실패 시: Tahoe가 멈추면 OpenCore 선택 화면에서 Sequoia로 부팅해 `/Volumes/Tahoe - Data/private/var/log/rmb-msgbuf.log`와 `/Volumes/Tahoe - Data/Library/Logs/DiagnosticReports`를 읽는다.
+
+아직 안 된 것: Tahoe의 동영상 하드웨어 디코딩(VCN 오프셋), AV1 플러그인, USB 오디오 확인.
+
 ## 역분석 도구
 
 대상 PC의 바이너리를 작업용 컴퓨터로 가져와 분석한다.
@@ -329,6 +359,7 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 | AV1 입력 구조체 배치 | `tools/av1dec/avdfill.h` | `av1dec` 출력이 소프트웨어 디코딩과 일치하는지 |
 | VTVideoDecoder 구조체 | `tools/av1dec/av1vt.c` | Apple의 `AV1DecoderSW.bundle`의 표와 대조(`docs/worklog-av1-s3.md`) |
 | 플러그인 이미지 | `scripts/m8-vtplugins` | macOS 업데이트 후 `build`로 다시 만든다 |
+| Tahoe용 커널 패치 세 개 (10비트 태그, 시간 역행, xHCI) | `configs/config.plist` | Darwin 25 빌드가 바뀌면 각 Find가 의도한 함수에서만 맞는지(`docs/tahoe.md`) |
 
 ## 설정
 
@@ -338,7 +369,7 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 - `DeviceProperties`의 `ATY,bin_image` (자기 기기에서 뽑은 VBIOS. 원 프로젝트의 스크립트 참고)
 - `EFI/OC`의 OpenCore 1.0.5 바이너리와 위에 적은 커널 확장들, `acpi/`의 SSDT
 
-주요 부팅 인자: `-rmbvcn`(동영상 디코딩), `-rmbnostamppoll`(완료 폴링 끄기), `-rmbnodisklog`(디스크 로그 끄기).
+주요 부팅 인자: `-rmbvcn`(동영상 디코딩), `-rmbnostamppoll`(완료 폴링 끄기), `-rmbnodisklog`(디스크 로그 끄기, Tahoe에서는 무시), `-rmbvcntahoe`(Tahoe에서 VCN 훅 시험).
 
 ## 알아둘 것
 
@@ -358,6 +389,7 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 | `docs/avd-decode-command-layout.md` | AMD VA 드라이버의 디코드 명령 구조 |
 | `docs/avd-av1-picparam-layout.md` | AV1 처리기의 입력 구조체 |
 | `docs/usb-audio-popping.md` | USB 오디오 팝핑 조사 |
+| `docs/tahoe.md` | macOS Tahoe 26.7.3 설치와 그래픽 가속까지의 경과, Tahoe용 패치 |
 
 ## 참고와 라이선스
 

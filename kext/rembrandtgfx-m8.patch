@@ -11,8 +11,22 @@ index 2306032..1ecb4ae 100644
  KEXT   := $(NAME).kext/Contents
  
  all: $(KEXT)/MacOS/$(NAME)
+diff --git a/src/RembrandtGfx/disklog.cpp b/src/RembrandtGfx/disklog.cpp
+index 67b616b..8cc6412 100644
+--- a/src/RembrandtGfx/disklog.cpp
++++ b/src/RembrandtGfx/disklog.cpp
+@@ -385,7 +385,8 @@ void keepPanic() { stallPanic(*gMsgbufp, 0); }
+ 
+ 
+ void diskLogStart(KernelPatcher &patcher) {
+-	if (checkKernelArgument("-rmbnodisklog"))
++	// Tahoe (Darwin 25) bring-up: always keep the disk log, it is the only way to see a failed boot.
++	if (checkKernelArgument("-rmbnodisklog") && getKernelVersion() < KernelVersion::Tahoe)
+ 		return;
+ 	gMsgbufp = reinterpret_cast<MsgBuf **>(patcher.solveSymbol(KernelPatcher::KernelID, "_msgbufp"));
+ 	patcher.clearError();
 diff --git a/src/RembrandtGfx/display.cpp b/src/RembrandtGfx/display.cpp
-index c566d2a..3c5e10f 100644
+index c566d2a..c7eecc5 100644
 --- a/src/RembrandtGfx/display.cpp
 +++ b/src/RembrandtGfx/display.cpp
 @@ -2585,12 +2585,16 @@ bool isVideoKey(const char *k) {
@@ -65,6 +79,15 @@ index c566d2a..3c5e10f 100644
  	}
  	accel->release();
  }
+@@ -3230,7 +3253,7 @@ void displayRoute(KernelPatcher &patcher, size_t index, mach_vm_address_t addres
+ 		if (kernel_thread_start(earlyOpen, nullptr, &t) == KERN_SUCCESS)
+ 			thread_deallocate(t);
+ 	}
+-	if (!checkKernelArgument("-rmbvcn")) {
++	if (!vcnEnabled()) {  // also hides the codecs on Tahoe, where the VCN hooks stay off
+ 		thread_t t;
+ 		if (kernel_thread_start(noVideoEngine, nullptr, &t) == KERN_SUCCESS)
+ 			thread_deallocate(t);
 diff --git a/src/RembrandtGfx/firmware.cpp b/src/RembrandtGfx/firmware.cpp
 index 8f44a70..bb0f38c 100644
 --- a/src/RembrandtGfx/firmware.cpp

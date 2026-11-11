@@ -1792,7 +1792,7 @@
 				8P//8A==
 				</data>
 				<key>MaxKernel</key>
-				<string>25.99.99</string>
+				<string>24.99.99</string>
 				<key>MinKernel</key>
 				<string>21.0.0</string>
 				<key>Replace</key>
@@ -1802,6 +1802,44 @@
 				<key>ReplaceMask</key>
 				<data>
 				AAAPAA==
+				</data>
+				<key>Skip</key>
+				<integer>0</integer>
+			</dict>
+			<dict>
+				<key>Arch</key>
+				<string>x86_64</string>
+				<key>Base</key>
+				<string>__ZN11IOPCIBridge13probeBusGatedEP14probeBusParams</string>
+				<key>Comment</key>
+				<string>M8 Tahoe: probeBusGated | Disable 10 bit tags (25.x: bt r,0x11; jae -&gt; jmp)</string>
+				<key>Count</key>
+				<integer>1</integer>
+				<key>Enabled</key>
+				<true/>
+				<key>Find</key>
+				<data>
+				D7rgEXMA
+				</data>
+				<key>Identifier</key>
+				<string>com.apple.iokit.IOPCIFamily</string>
+				<key>Limit</key>
+				<integer>0</integer>
+				<key>Mask</key>
+				<data>
+				///w//8A
+				</data>
+				<key>MaxKernel</key>
+				<string>25.99.99</string>
+				<key>MinKernel</key>
+				<string>25.0.0</string>
+				<key>Replace</key>
+				<data>
+				AAAAAOsA
+				</data>
+				<key>ReplaceMask</key>
+				<data>
+				AAAAAP8A
 				</data>
 				<key>Skip</key>
 				<integer>0</integer>
@@ -1868,9 +1906,47 @@
 				SAAA8P////8AAAAAAA==
 				</data>
 				<key>MaxKernel</key>
-				<string>25.99.99</string>
+				<string>24.99.99</string>
 				<key>MinKernel</key>
 				<string>21.0.0</string>
+				<key>Replace</key>
+				<data>
+				AAAAAAAAAGaQZpBmkA==
+				</data>
+				<key>ReplaceMask</key>
+				<data>
+				AAAAAAAAAP///////w==
+				</data>
+				<key>Skip</key>
+				<integer>0</integer>
+			</dict>
+			<dict>
+				<key>Arch</key>
+				<string>x86_64</string>
+				<key>Base</key>
+				<string></string>
+				<key>Comment</key>
+				<string>M8 Tahoe: thread_invoke, thread_dispatch | Remove non-monotonic time panic (field 0x490 in 25.x)</string>
+				<key>Count</key>
+				<integer>2</integer>
+				<key>Enabled</key>
+				<true/>
+				<key>Find</key>
+				<data>
+				SCsAkAQAAA8AAAAAAA==
+				</data>
+				<key>Identifier</key>
+				<string>kernel</string>
+				<key>Limit</key>
+				<integer>0</integer>
+				<key>Mask</key>
+				<data>
+				SO8A8P////8AAAAAAA==
+				</data>
+				<key>MaxKernel</key>
+				<string>25.99.99</string>
+				<key>MinKernel</key>
+				<string>25.0.0</string>
 				<key>Replace</key>
 				<data>
 				AAAAAAAAAGaQZpBmkA==
@@ -1948,6 +2024,42 @@
 				<key>Replace</key>
 				<data>
 				RTH2Mfb/kAgHAACFwJDpiwIAAA==
+				</data>
+				<key>ReplaceMask</key>
+				<data>
+				</data>
+				<key>Skip</key>
+				<integer>0</integer>
+			</dict>
+			<dict>
+				<key>Arch</key>
+				<string>x86_64</string>
+				<key>Base</key>
+				<string></string>
+				<key>Comment</key>
+				<string>M8 Tahoe: AppleUSBXHCIPCI::start | use legacy pin interrupt instead of MSI (25.x)</string>
+				<key>Count</key>
+				<integer>1</integer>
+				<key>Enabled</key>
+				<true/>
+				<key>Find</key>
+				<data>
+				Mdsx9v+QCAcAAIXAD4VoAgAA
+				</data>
+				<key>Identifier</key>
+				<string>com.apple.driver.usb.AppleUSBXHCIPCI</string>
+				<key>Limit</key>
+				<integer>0</integer>
+				<key>Mask</key>
+				<data>
+				</data>
+				<key>MaxKernel</key>
+				<string>25.99.99</string>
+				<key>MinKernel</key>
+				<string>25.0.0</string>
+				<key>Replace</key>
+				<data>
+				Mdsx9v+QCAcAAIXAkOloAgAA
 				</data>
 				<key>ReplaceMask</key>
 				<data>
