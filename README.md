@@ -118,9 +118,13 @@ ssh <M8> 'sw_vers; uname -a; nvram boot-args'
 
 절차:
 
-1. [원 프로젝트](https://github.com/caoshiyuan0211-blip/winmax2-2022-6800u-hackintosh)를 받는다. `src/RembrandtGfx`가 macOS의 Navi 드라이버(AMDRadeonX6000)를 Rembrandt에서 돌게 하는 Lilu 플러그인이다.
+1. [원 프로젝트](https://github.com/caoshiyuan0211-blip/winmax2-2022-6800u-hackintosh)를 받는다. `src/RembrandtGfx`가 macOS의 Navi 드라이버(AMDRadeonX6000)를 Rembrandt에서 돌게 하는 Lilu 플러그인이다. 패치는 커밋 `a114bde`에 맞춰 만들었으므로 그 커밋을 받는다(`git checkout a114bde`). 더 새 커밋에서는 패치가 적용되지 않을 수 있다.
 2. `kext/rembrandtgfx-m8.patch`를 적용하고 `kext/vcn.cpp`, `kext/mmhubremap.hpp`, `kext/mmhub2gc.hpp`를 `src/RembrandtGfx`에 넣는다.
-3. 펌웨어를 linux-firmware의 `yellow_carp_*.bin`에서 원 프로젝트의 `scripts/fw-extract.py`로 뽑는다(Makefile의 `fw/toc.bin` 규칙).
+3. 펌웨어를 linux-firmware의 `yellow_carp_*.bin`에서 원 프로젝트의 `scripts/fw-extract.py`로 뽑는다(Makefile의 `fw/toc.bin` 규칙). VCN 펌웨어 `fw/vcn.bin`은 이 스크립트가 만들지 않으므로 직접 만든다. linux-firmware의 `amdgpu/vcn_3_1_2.bin`(`yellow_carp_vcn.bin`이 이것을 가리키는 링크다)에서 앞 0x100바이트 amdgpu 헤더를 잘라낸다. 이 파일이 없으면 `fw.s`를 조립하는 단계에서 빌드가 멈춘다.
+
+```bash
+zstd -qdc <linux-firmware>/amdgpu/vcn_3_1_2.bin.zst | tail -c +257 > src/RembrandtGfx/fw/vcn.bin   # 압축되지 않은 파일이면 tail -c +257 <파일>
+```
 4. 빌드한다. 원 프로젝트의 Makefile은 cctools 링커를 기대하지만 Xcode의 링커로도 된다.
 
 ```bash
@@ -129,7 +133,7 @@ make LD=ld
 
 5. 대상 PC의 VBIOS를 뽑아 OpenCore 설정의 `DeviceProperties`에 `ATY,bin_image`로 넣는다(원 프로젝트의 `scripts/vfct-rom.py`, `augment-rom.py`). 자세한 것은 `docs/install.md`.
 6. 660M은 PCI 리비전을 Navi 23으로 보고하게 해야 한다(`kext/rembrandtgfx-pci-revision.patch`, 이미 통합 패치에 포함).
-7. `scripts/m8-apply-oc`로 ESP에 설치하고 재부팅한다.
+7. `scripts/m8-apply-oc`로 ESP에 설치하고 재부팅한다. 이 스크립트는 대상 PC의 macOS 계정 이름이 `user`이고 작업 폴더가 `/Users/user/m8`이라고 가정한다(커널 확장의 디버깅 기능 일부도 같은 경로를 쓴다). 다른 이름이면 스크립트 머리의 `D=` 경로를 고친다.
 
 검증:
 
