@@ -26,7 +26,7 @@ index 67b616b..8cc6412 100644
  	gMsgbufp = reinterpret_cast<MsgBuf **>(patcher.solveSymbol(KernelPatcher::KernelID, "_msgbufp"));
  	patcher.clearError();
 diff --git a/src/RembrandtGfx/display.cpp b/src/RembrandtGfx/display.cpp
-index c566d2a..c7eecc5 100644
+index c566d2a..566b554 100644
 --- a/src/RembrandtGfx/display.cpp
 +++ b/src/RembrandtGfx/display.cpp
 @@ -2585,12 +2585,16 @@ bool isVideoKey(const char *k) {
@@ -84,7 +84,7 @@ index c566d2a..c7eecc5 100644
  			thread_deallocate(t);
  	}
 -	if (!checkKernelArgument("-rmbvcn")) {
-+	if (!vcnEnabled()) {  // also hides the codecs on Tahoe, where the VCN hooks stay off
++	if (!vcnEnabled() || vcnArmMode()) {  // hidden when VCN is off (-rmbvcn absent, -rmbnovcntahoe) or until armed
  		thread_t t;
  		if (kernel_thread_start(noVideoEngine, nullptr, &t) == KERN_SUCCESS)
  			thread_deallocate(t);

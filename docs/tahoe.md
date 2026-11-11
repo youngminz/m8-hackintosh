@@ -9,9 +9,10 @@ Sequoia 15.8.2가 돌아가는 M8에 Tahoe 26.7.3(25G342)을 **같은 APFS 컨�
 | 부팅, Metal 가속 | 동작 (로그인 후 GPU 오류 없음) |
 | 유선랜 | 동작 |
 | USB | 동작 (Tahoe용 핀 인터럽트 패치) |
-| H.264, HEVC, AV1 하드웨어 디코딩 | 꺼 둠. 소프트웨어 디코딩. VCN 훅의 오프셋을 Tahoe 드라이버에 맞추지 않았다 |
+| H.264, HEVC, AV1 하드웨어 디코딩 | 동작 (Sequoia와 같은 `-rmbvcn`). AV1은 플러그인 이미지를 Tahoe에서 다시 만들어 마운트 |
+| H.264, HEVC 하드웨어 인코딩 | 동작 |
 | USB 오디오 끊김 | 미확인 |
-| 장시간 안정성 | 미확인 (로그인 후 수 분 확인) |
+| 장시간 안정성 | 10분 부하 시험 통과 (AV1 하드웨어 디코딩 + Metal 계산 + 1GB 양방향 전송 동시) |
 
 ## 1. 설치
 
@@ -98,14 +99,32 @@ Tahoe에서는 VCN 훅(`kext/vcn.cpp`, macOS 15 오프셋)을 끄게 해 두었�
 
 수정: VCN이 꺼져 있으면(`vcnEnabled()`가 거짓) 코덱 광고를 숨기는 `noVideoEngine`을 돌린다. 전에는 부팅 인자 `-rmbvcn`만 보고 판단했다. 그 뒤 로그인 후에도 GPU 오류 0건, 정상 속도.
 
+### 4.3 부하 중 네트워크 패닉 (`fq_codel`)
+
+하드웨어 디코딩과 scp 전송을 함께 돌리다 기기가 멈췄다(자동 재부팅도 되지 않음). 다음 부팅에 남은 패닉 보고서:
+
+```
+panic: assertion failed: now >= *pkt_enq_time, file: .../bsd/net/classq/classq_fq_codel.c, line: 1127
+  fq_codel_dq <- ifclassq_dequeue <- IONetworkInterface::dequeueOutputPacketsWithMaxSize <- AppleUSBNCMPacketQueue::fill
+```
+
+패킷을 큐에 넣은 시각보다 꺼낸 시각이 이르다는 검사다. 이 CPU는 코어마다 TSC가 조금씩 어긋나(AmdTscSync를 써도), 넣은 코어와 꺼낸 코어가 다르면 시간이 거꾸로 보일 수 있다. Sequoia 커널에는 이 검사가 없고 Tahoe에서 새로 생겼다(두 커널의 시간 순서 assert 문자열을 비교하면 이것 하나만 늘었다).
+
+Tahoe용 커널 패치(Identifier `kernel`, MinKernel 25.0.0, Count 1): `now - pkt_enq_time`이 음수일 때 assert로 가던 `jb`를 "대기 시간이 목표 이하" 경로로 돌린다.
+
+| | 바이트 |
+|---|---|
+| Find | `4d 89 c1 49 29 c9 72 74 48 8b 46 20` |
+| Replace | `4d 89 c1 49 29 c9 72 52 48 8b 46 20` |
+
 ## 5. 커널 확장의 Tahoe 처리 (`kext/`)
 
-- Darwin 25에서는 VCN 훅을 켜지 않는다. `-rmbvcntahoe`를 넣으면 시험 삼아 켤 수 있다.
-- VCN이 꺼지면 하드웨어 코덱을 숨긴다(VideoToolbox는 소프트웨어 코덱을 쓴다).
+- VCN 훅은 Sequoia와 같이 `-rmbvcn`으로 켠다. 구조체 오프셋과 `waitForStamp`가 Tahoe 드라이버에서도 같았다. Tahoe에서만 끄려면 `-rmbnovcntahoe`.
+- VCN이 꺼지면 하드웨어 코덱을 숨긴다(VideoToolbox는 소프트웨어 코덱을 쓴다). 꺼진 VCN에 작업이 가면 4.2의 GPU 재시작이 된다.
 - Darwin 25에서는 `-rmbnodisklog`를 무시하고 디스크 로그(`/private/var/log/rmb-msgbuf.log`)를 항상 남긴다. Tahoe가 멈추면 Sequoia로 부팅해 `/Volumes/Tahoe - Data/private/var/log/rmb-msgbuf.log`를 읽는다.
+- AV1 VideoToolbox 플러그인 이미지는 Tahoe에서 `m8-vtplugins build`로 다시 만든다(Sequoia 이미지의 Apple 플러그인 복사본은 버전이 다르다).
 
 ## 6. 남은 것
 
-- VCN(H.264, HEVC, AV1 디코딩): `kext/vcn.cpp`의 구조체 오프셋과 `stampPoll`의 vtable 오프셋을 Tahoe의 AMDRadeonX6000에서 다시 찾아야 한다.
-- AV1 플러그인 이미지: Tahoe 빌드로 다시 만들고, VTVideoDecoder 구조체를 대조해야 한다.
-- USB 오디오 끊김과 장시간 안정성 확인.
+- USB 오디오 끊김과 수 시간 단위 안정성 확인.
+- 패닉 뒤 자동 재부팅이 되지 않고 멈춘다.

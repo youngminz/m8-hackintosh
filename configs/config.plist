@@ -1964,6 +1964,42 @@
 				<key>Base</key>
 				<string></string>
 				<key>Comment</key>
+				<string>M8 Tahoe: fq_codel | now &lt; pkt_enq_time (cross-core TSC skew) takes the below-target path instead of assertion panic</string>
+				<key>Count</key>
+				<integer>1</integer>
+				<key>Enabled</key>
+				<true/>
+				<key>Find</key>
+				<data>
+				TYnBSSnJcnRIi0Yg
+				</data>
+				<key>Identifier</key>
+				<string>kernel</string>
+				<key>Limit</key>
+				<integer>0</integer>
+				<key>Mask</key>
+				<data>
+				</data>
+				<key>MaxKernel</key>
+				<string>25.99.99</string>
+				<key>MinKernel</key>
+				<string>25.0.0</string>
+				<key>Replace</key>
+				<data>
+				TYnBSSnJclJIi0Yg
+				</data>
+				<key>ReplaceMask</key>
+				<data>
+				</data>
+				<key>Skip</key>
+				<integer>0</integer>
+			</dict>
+			<dict>
+				<key>Arch</key>
+				<string>x86_64</string>
+				<key>Base</key>
+				<string></string>
+				<key>Comment</key>
 				<string>Algrey / Zormeister | _mtrr_update_action | Fix PAT | 15.0+</string>
 				<key>Count</key>
 				<integer>0</integer>
