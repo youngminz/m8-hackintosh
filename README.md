@@ -1,5 +1,11 @@
 # GMKtec M8 해킨토시 (Ryzen 5 PRO 6650H, Radeon 660M)
 
+| macOS 15.8.2 Sequoia | macOS 26.7.3 Tahoe |
+|---|---|
+| <img src="docs/images/m8-sequoia.jpg" width="400" alt="Sequoia 15.8.2의 이 Mac에 관하여와 시스템 정보: AMD Radeon 660M, Metal 지원, 4K 출력"> | <img src="docs/images/m8-tahoe.jpg" width="400" alt="Tahoe 26.7.3의 이 Mac에 관하여와 시스템 정보: AMD Radeon 660M, Metal 지원, 4K 출력"> |
+
+같은 M8(앞의 본체)에서 두 OS를 각각 부팅한 화면. 그래픽이 AMD Radeon 660M으로 잡히고 Metal을 지원하며, 4K 모니터를 USB-C(DisplayPort)로 출력한다. 일련번호는 가렸다.
+
 GMKtec NucBox M8 미니 PC에 **macOS 15.8.2 Sequoia**와 **macOS 26.7.3 Tahoe**를 같은 디스크에 함께 올리고, 내장 그래픽(Rembrandt)의 Metal 가속과 동영상 하드웨어 디코딩까지 살린 작업 기록이다. OpenCore 설정 하나로 두 OS를 다 부팅하고, 선택 화면에서 고른다. OpenCore 설정, 커널 확장 패치, 역분석 도구, 그리고 macOS에 없던 **AV1 하드웨어 디코딩**과 **VP9 하드웨어 디코딩**을 VideoToolbox에 붙인 디코더가 들어 있다.
 
 이 저장소는 완성된 EFI 배포판이 아니다. 같은 기기나 같은 칩(Rembrandt, Radeon 660M과 680M)으로 작업하는 사람이 참고할 자료다. 커널 패치와 디코더의 일부는 두 macOS 빌드(15.8.2 `24H232`, 26.7.3 `25G342`)의 바이너리에 맞춰져 있어, 다른 빌드에서는 다시 확인해야 한다("버전에 묶인 것").
