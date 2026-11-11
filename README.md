@@ -123,7 +123,7 @@ ssh <M8> 'sw_vers; uname -a; nvram boot-args'
 3. 펌웨어를 linux-firmware의 `yellow_carp_*.bin`에서 원 프로젝트의 `scripts/fw-extract.py`로 뽑는다(Makefile의 `fw/toc.bin` 규칙). VCN 펌웨어 `fw/vcn.bin`은 이 스크립트가 만들지 않으므로 직접 만든다. linux-firmware의 `amdgpu/vcn_3_1_2.bin`(`yellow_carp_vcn.bin`이 이것을 가리키는 링크다)에서 앞 0x100바이트 amdgpu 헤더를 잘라낸다. 이 파일이 없으면 `fw.s`를 조립하는 단계에서 빌드가 멈춘다.
 
 ```bash
-zstd -qdc <linux-firmware>/amdgpu/vcn_3_1_2.bin.zst | tail -c +257 > src/RembrandtGfx/fw/vcn.bin   # 압축되지 않은 파일이면 tail -c +257 <파일>
+mkdir -p src/RembrandtGfx/fw && zstd -qdc <linux-firmware>/amdgpu/vcn_3_1_2.bin.zst | tail -c +257 > src/RembrandtGfx/fw/vcn.bin   # 압축되지 않은 파일이면 tail -c +257 <파일>
 ```
 4. 빌드한다. 원 프로젝트의 Makefile은 cctools 링커를 기대하지만 Xcode의 링커로도 된다.
 
