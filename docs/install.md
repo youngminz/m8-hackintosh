@@ -1,5 +1,7 @@
 # GMKtec NucBox M8에 macOS 15.8.2를 설치한 실제 절차
 
+> Tahoe 26.7.3은 이미 설치된 Sequoia에서 별도 볼륨에 설치했다(`docs/tahoe.md` 1~3절). 이 문서의 가상 머신 방법은 디스크가 비어 있을 때 쓰는 방법이고, Tahoe에도 쓸 수 있을 것으로 보지만 시험하지 않았다. 실기기에서는 복구와 설치 환경이 뜨지 않는다(`docs/tahoe.md` 6절).
+
 이 문서는 2026-11-10 새벽(KST 02:17부터 07:13까지)의 Claude Code 세션 기록과 작업 저장소 `m8-hackintosh`의 커밋 `eb80fdf`부터 `a2c43df`까지를 근거로, 실제로 실행한 것만 정리한 것이다. 추측이나 확인하지 못한 내용은 마지막 "불분명한 점"에 따로 모았다.
 
 > 이 문서가 가리키는 경로 가운데 공개 저장소에 없는 것이 있다. `roms/`(VBIOS), `smbios.txt`, `dump/`의 대부분, `logs/`, `recovery/`, `efi/`의 바이너리는 기기 식별 값이나 타사 바이너리라 올리지 않았다. 여기에 있는 것은 `configs/`, `acpi/`(원래 `src/acpi/`), `kext/`(원래 `patches/`, MCE 차단용 `AppleMCEReporterDisabler.kext` 포함), `scripts/`(원래 `scripts/`와 `ventoy/`), `hardware/`(`lspci`, `cpuinfo`)다. 커밋 번호는 비공개 작업 저장소의 것이다.

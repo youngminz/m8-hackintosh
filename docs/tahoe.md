@@ -1,6 +1,6 @@
 # macOS Tahoe 26.7.3 올리기 (2026-11-11)
 
-Sequoia 15.8.2가 돌아가는 M8에 Tahoe 26.7.3(25G342)을 **같은 APFS 컨테이너의 별도 볼륨**으로 설치해, 그래픽 가속이 붙은 상태로 쓸 수 있게 만든 기록이다. Sequoia는 그대로 두고 OpenCore 선택 화면에서 둘 중 하나를 고른다. ESP 설정은 하나(`configs/config.plist`)로 두 OS를 다 부팅한다.
+Sequoia 15.8.2가 돌아가는 M8에 Tahoe 26.7.3(25G342)을 **같은 APFS 컨테이너의 별도 볼륨**으로 설치해, 그래픽 가속이 붙은 상태로 쓸 수 있게 만든 기록이다. Sequoia는 그대로 두고 OpenCore 선택 화면에서 둘 중 하나를 고른다. ESP 설정은 하나(`configs/config.plist`)로 두 OS를 다 부팅한다. 두 버전의 기능 비교와 단계별 절차는 README에 있고, 이 문서는 Tahoe에서 겪은 문제와 패치의 세부를 적은 기록이다.
 
 현재 상태:
 
@@ -20,7 +20,7 @@ Sequoia 15.8.2가 돌아가는 M8에 Tahoe 26.7.3(25G342)을 **같은 APFS 컨�
 1. 같은 컨테이너에 볼륨을 만든다: `sudo diskutil apfs addVolume disk1 APFS Tahoe`.
 2. `softwareupdate --fetch-full-installer --full-installer-version 26.7.3`으로 설치 앱을 받는다.
 3. 설치 앱을 **창으로** 열고 대상 디스크로 `Tahoe`를 고른다. `startosinstall`에는 대상 볼륨을 고르는 옵션이 없다(지금 부팅한 볼륨을 업그레이드한다).
-4. 설치 기간에는 그래픽 kext 없이 부팅했다: `RembrandtGfx` 끔, GPU `DeviceProperties` 비움, 부팅 인자 `-v keepsyms=1 debug=0x100 ipc_control_port_options=0 -lilubetaall -amd_no_dgpu_accel`, `PlatformInfo > Generic > MaxBIOSVersion = true`. 그래픽 kext를 넣은 지금 설정으로도 설치가 되는지는 시험하지 않았다.
+4. 설치 기간에는 그래픽 kext 없이 부팅했다: `RembrandtGfx` 끔, GPU `DeviceProperties` 비움, 부팅 인자 `-v keepsyms=1 debug=0x100 ipc_control_port_options=0 -lilubetaall -amd_no_dgpu_accel`, `PlatformInfo > Generic > MaxBIOSVersion = true`. 지금 설정(그래픽 kext 포함)으로는 복구 모드가 뜨지 않는다(6절). 설치 환경도 같은 시스템 이미지라 마찬가지로 본다.
 
 ## 2. 설치 단계에서 막힌 것
 
@@ -137,6 +137,35 @@ Tahoe용 커널 패치(Identifier `kernel`, MinKernel 25.0.0, Count 1): `now - p
 - Darwin 25에서는 `-rmbnodisklog`를 무시하고 디스크 로그(`/private/var/log/rmb-msgbuf.log`)를 항상 남긴다. Tahoe가 멈추면 Sequoia로 부팅해 `/Volumes/Tahoe - Data/private/var/log/rmb-msgbuf.log`를 읽는다.
 - AV1 VideoToolbox 플러그인 이미지는 Tahoe에서 `m8-vtplugins build`로 다시 만든다(Sequoia 이미지의 Apple 플러그인 복사본은 버전이 다르다).
 
-## 6. 남은 것
+## 6. 복구 모드와 설치 환경 (실기기에서 안 뜸)
+
+지금 설정으로 OpenCore에서 Tahoe 복구(26.7.3)를 고르면, 커널과 초기 데몬까지 뜨고 복구 화면이 나오기 전에 멈춘다. 결론부터: **설치는 가상 머신에서 하거나(`docs/install.md` 6절) 이미 도는 macOS에서 설치 앱으로 한다.** 설치 단계에는 원래 가속이 없고, 설치된 시스템의 첫 부팅부터는 지금 EFI로 가속이 붙는다.
+
+### 복구 이미지에는 가속 드라이버가 없다
+
+복구 볼륨의 `BaseSystem.dmg`에 든 `BaseSystemKernelExtensions.kc`에는 `AMDRadeonX6000Framebuffer`(화면 출력)만 있고, `AMDRadeonX6000HWLibs`, `AMDRadeonX6000HWServices`, `AMDRadeonX6000`(가속기)은 없다. 그래서 복구와 설치 환경에서는 Metal 가속이 불가능하다.
+
+### 왜 멈추나
+
+평소에는 HWLibs가 PSP로 화면 펌웨어(DMUB)를 다시 올리고, RembrandtGfx가 그 직전에 DMUB를 초기화한다(`dmub-reset`). 복구에는 HWLibs가 없어 이 단계가 없다. 화면 드라이버(DAL)는 부팅 화면(GOP)이 쓰던 DMUB를 그대로 넘겨받는다.
+
+복구 부팅의 커널 로그(아래 진단으로 얻음):
+
+```
+[ 2.80] found com.apple.kext.AMDRadeonX6000Framebuffer        <- HWLibs, AMDRadeonX6000은 나오지 않음
+[ 3.34] dmub-cmd: held NULL-only batch, DAL wptr 0, hw wptr 5c0 <- DAL이 처음 쓰기 전에 이미 명령 23개가 대기
+[10.20] stall: DMUB stuck at [0] (wptr 5c0) type 80 sub 3 payload 00000700
+        IH 5s: clients none; DCE src none                       <- 이후 GPU 인터럽트 없음
+```
+
+멈춘 명령은 `ENABLE_DISP_POWER_GATING`으로, 평소 부팅에서는 RembrandtGfx가 걸러 내는 명령이다(PHY가 죽는다). 복구에서는 거르기 전에 이미 하드웨어 큐에 들어가 있었다.
+
+복구와 설치 환경에서만 AMD 화면 컨트롤러(`AmdRadeonController::start`)를 거절해 기본 프레임버퍼로 떨어지게도 해 봤지만 여전히 복구 화면이 뜨지 않았다(GUI 프로세스가 계속 다시 시작하는 것으로 보였다). 실익이 없어 여기서 멈췄다. 이어서 볼 사람은 GPU 장치 속성(`DeviceProperties`의 Navi 23 위장)이 복구에도 적용된다는 점부터 보면 된다. 설치 기간에 위장과 kext를 둘 다 뺀 설정(1절 4번)에서는 설치 환경이 떴다.
+
+### 진단 방법: 패닉에 커널 로그 싣기
+
+복구는 읽기 전용 이미지에서 돌아 디스크 로그가 남지 않는다. 대신 kext가 부팅 150초에 일부러 패닉을 내면서 커널 로그 일부를 패닉 메시지에 싣게 했다. NVRAM의 패닉 기록은 2.3KB 정도만 남으므로, 30초에 kext의 설정 줄을 먼저 떠 두고 150초에 오류성 줄을 덧붙였다. 패닉 뒤에는 `panicreset`이 재시작하고, 다음 정상 부팅이 패닉 보고서를 `/Library/Logs/DiagnosticReports`에 남긴다. 이 코드는 공개 kext에는 넣지 않았다(부팅 인자 `-rmbrecdiag`로 켜던 실험 코드).
+
+## 7. 남은 것
 
 - USB 오디오 끊김과 수 시간 단위 안정성 확인.
