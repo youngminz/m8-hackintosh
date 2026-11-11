@@ -1,5 +1,5 @@
 #!/bin/bash
-# M8 Ubuntu live: open SSH for the Mac (put your own public key in PUBKEY)
+# M8 Ubuntu live: open SSH for the work computer (put your own public key in PUBKEY)
 set -e
 PUBKEY='ssh-ed25519 CHANGE_ME_YOUR_PUBLIC_KEY you@example'
 if ! dpkg -s openssh-server >/dev/null 2>&1; then

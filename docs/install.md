@@ -8,9 +8,9 @@
 
 - `<M8_IP>`: M8이 DHCP로 받은 주소. Ubuntu 라이브와 macOS가 같은 주소를 받았다.
 - `<DISK>`: 설치 대상 NVMe의 `/dev/disk/by-id/nvme-<모델>_<일련번호>` 경로.
-- `<GITHUB_USER>`: 작업용 맥의 SSH 공개 키가 등록된 GitHub 계정.
+- `<GITHUB_USER>`: 작업용 컴퓨터의 SSH 공개 키가 등록된 GitHub 계정.
 - `<MAC_USER>`: macOS에서 만든 계정의 짧은 이름.
-- `$M`: 작업용 맥의 저장소 경로(`~/workspaces/m8-hackintosh`).
+- `$M`: 작업용 컴퓨터의 저장소 경로(`~/workspaces/m8-hackintosh`).
 - 근거 표기: `[세션 hh:mm]`은 주 세션 기록의 KST 시각, `[커밋 xxxxxxx]`는 저장소 커밋.
 
 ## 0. 대상 하드웨어와 결과
@@ -31,9 +31,11 @@
 
 ## 1. 준비물과 사전 조건
 
-1. 작업용 맥: Xcode 명령줄 도구(`clang`, `ld`), `gh`, `python3`, Homebrew의 `acpica`(`iasl`). [세션 02:55, 02:57]
+1. 작업용 컴퓨터(이 기록에서는 Apple 실리콘 맥): Xcode 명령줄 도구(`clang`, `ld`), `gh`, `python3`, Homebrew의 `acpica`(`iasl`). [세션 02:55, 02:57]
+   - 리눅스나 윈도우(WSL)라면 `clang`, cctools-port의 ld64(RembrandtGfx 빌드), `python3`, `acpica-tools`(`iasl`)를 쓴다. `PlistBuddy` 대신 Python `plistlib`으로 설정을 고친다. macOS 전용 도구는 설치가 끝난 뒤 대상 PC에서 빌드한다(README "작업용 컴퓨터별로 달라지는 것").
+   - 작업용 컴퓨터가 없으면 이 문서의 2절부터 7절은 대상 PC의 Ubuntu 라이브 위에서 에이전트가 직접 실행한다. 라이브 세션은 재부팅하면 사라지므로 작업 파일을 USB에 둔다(README "작업용 컴퓨터가 없을 때").
 2. USB 저장 장치: Ventoy가 설치된 외장 SSD(Samsung T5). 루트에 `ubuntu-26.04.1-desktop-amd64.iso`를 넣어 두었다. Ventoy 자체를 어떻게 설치했는지는 기록에 없다. [세션 03:25]
-3. 네트워크: M8과 작업용 맥이 같은 LAN. M8은 모니터의 USB 랜으로 연결되어 DHCP 주소를 받았다. 설치 프로그램이 macOS를 인터넷에서 내려받으므로 유선 인터넷이 필수다.
+3. 네트워크: M8과 작업용 컴퓨터가 같은 LAN. M8은 모니터의 USB 랜으로 연결되어 DHCP 주소를 받았다. 설치 프로그램이 macOS를 인터넷에서 내려받으므로 유선 인터넷이 필수다.
 4. BIOS: 설치 과정에서 BIOS 설정을 바꾼 기록은 없다. Ubuntu에서 확인한 상태는 다음과 같았고, 이 상태가 전제 조건이다.
    - Secure Boot 꺼짐: `mokutil --sb-state` 결과 `SecureBoot disabled`. [세션 02:52]
    - 가상화(SVM) 켜짐: `/dev/kvm` 존재, `kvm_amd` 로드, Nested Paging 활성. [세션 03:35, 03:37]
@@ -51,7 +53,7 @@
    sudo systemctl start ssh
    ```
 
-3. 작업용 맥에서 접속을 확인한다. 라이브 세션은 부팅할 때마다 호스트 키가 바뀌므로 매번 이전 키를 지운다.
+3. 작업용 컴퓨터에서 접속을 확인한다. 라이브 세션은 부팅할 때마다 호스트 키가 바뀌므로 매번 이전 키를 지운다.
 
    ```bash
    ssh-keygen -R <M8_IP>
@@ -84,7 +86,7 @@
 
 ## 3. 하드웨어 덤프 (`dump/` 만들기)
 
-작업용 맥에서 실행했다. [세션 02:51, 커밋 eb80fdf]
+작업용 컴퓨터에서 실행했다. [세션 02:51, 커밋 eb80fdf]
 
 ```bash
 D=$M/dump; mkdir -p $D/acpi
@@ -123,7 +125,7 @@ ssh ubuntu@<M8_IP> 'set -e; D=<DISK>
 - 파티션 1: 4GB, EFI 시스템 파티션, FAT32, 라벨 `OC`. OpenCore와 복구 이미지를 함께 넣으려고 크게 잡았다.
 - 파티션 2: 나머지(약 473GiB), 타입 `af0a`(APFS). 포맷은 macOS 설치 프로그램의 디스크 유틸리티에서 했다.
 
-## 5. OpenCore EFI 구성 (작업용 맥에서)
+## 5. OpenCore EFI 구성 (작업용 컴퓨터에서)
 
 ### 5.1 내려받은 것과 버전
 
@@ -320,7 +322,7 @@ case "$1" in
 esac
 ```
 
-사용 패턴: 작업용 맥에서 `ssh ubuntu@<M8_IP> 'vmctl shot /tmp/s.png; cat /tmp/s.png' > s.png`로 화면을 받아 보고, 좌표를 읽어 `W=1280 H=800 vmctl click X Y`로 누른다. 실제 화면은 1280x800이었으므로 `W`, `H`를 그 값으로 줘야 좌표가 맞는다. USB 태블릿 장치를 붙였기 때문에 절대 좌표 클릭이 된다.
+사용 패턴: 작업용 컴퓨터에서 `ssh ubuntu@<M8_IP> 'vmctl shot /tmp/s.png; cat /tmp/s.png' > s.png`로 화면을 받아 보고, 좌표를 읽어 `W=1280 H=800 vmctl click X Y`로 누른다. 실제 화면은 1280x800이었으므로 `W`, `H`를 그 값으로 줘야 좌표가 맞는다. USB 태블릿 장치를 붙였기 때문에 절대 좌표 클릭이 된다.
 
 ### 6.5 설치 진행
 
@@ -355,7 +357,7 @@ esac
    ```
 
    문자열을 QEMU 키 이름으로 바꾸는 짧은 파이썬 변환기를 썼다(공백은 `spc`, `/`는 `slash`, `~`는 `shift-grave_accent` 등). `10.0.2.2`는 QEMU 사용자 모드 네트워크에서 호스트를 가리킨다.
-4. 접속과 확인. 작업용 맥의 `~/.ssh/config`에 별칭을 추가했다. [세션 05:46, 05:56]
+4. 접속과 확인. 작업용 컴퓨터의 `~/.ssh/config`에 별칭을 추가했다. [세션 05:46, 05:56]
 
    ```
    Host m8vm
@@ -488,7 +490,7 @@ esac
 ## 8. 복구 절차: macOS가 부팅되지 않을 때
 
 1. Ventoy USB를 꽂고 전원을 길게 눌러 끈 뒤 켠다. Ventoy가 부팅 순서 1순위였고, 안 뜨면 부팅 메뉴(F7로 안내)에서 고른다. persistence가 선택된 Ubuntu가 뜨면 1분 안에 SSH가 열린다.
-2. 작업용 맥에서 접속한다. 라이브 세션 호스트 키는 매번 다르다.
+2. 작업용 컴퓨터에서 접속한다. 라이브 세션 호스트 키는 매번 다르다.
 
    ```bash
    until nc -z -G 2 <M8_IP> 22; do sleep 5; done
@@ -523,7 +525,7 @@ esac
 |---|---|---|
 | 원격 로그인(SSH) | 시스템 설정의 Remote Login을 사용자가 직접 켬 | [세션 05:45] |
 | 공개 키 | 6.6절의 방법으로 `~/.ssh/authorized_keys`에 추가 | [세션 05:46] |
-| 맥 쪽 별칭 | `Host m8mac`(모니터 USB 랜 주소), 나중에 `Host m8lan`(본체 랜 주소). 둘 다 `HostKeyAlias m8-macos` | [세션 07:02, 07:21] |
+| 작업용 컴퓨터 쪽 별칭 | `Host m8mac`(모니터 USB 랜 주소), 나중에 `Host m8lan`(본체 랜 주소). 둘 다 `HostKeyAlias m8-macos` | [세션 07:02, 07:21] |
 | 호스트 키 | Ubuntu와 macOS가 같은 IP를 받아 `known_hosts`가 충돌한다. 가상 머신에서 확인해 둔 macOS 호스트 키를 `m8-macos` 별칭으로 등록해 해결 | [세션 07:02] |
 | 임시 전체 sudo | `/etc/sudoers.d/claude`. 진단 중에만 쓰고 삭제 | [세션 06:00, 07:05] |
 | 자동 업데이트 | 설정 도우미에서 "다운로드만" | [세션 05:43] |

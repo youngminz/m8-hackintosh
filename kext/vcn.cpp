@@ -111,7 +111,7 @@ uint32_t vcnAbs(uint64_t ctx, uint64_t seg, uint64_t off) {
 
 uint64_t gVcnInst;  // VCN SWIP instance (ctx+0x10)
 
-// Experiment switches, re-read every second from /Users/user/m8/vcn-mode (hex) by the watch thread:
+// Experiment switches (-rmbvcnexp only), re-read every second from /Users/user/m8/vcn-mode (hex) by the watch thread:
 // 1 = NOP out Apple's TSC command (0xf) in the IB packet      2 = Linux fw_shared present_flag_0
 // 4 = no bit 31 in fw_shared rb.wptr / UVD_SCRATCH2            8 = UVD_LMI_CTRL2 = 0 in the DPG list
 // 0x10 = smu_interface_type 2 (+ SMU_VERSION_INFO flag, fw_shared size 0x1000)
@@ -556,6 +556,12 @@ bool gartRead(uint64_t va, uint32_t *out, uint32_t n) {
 // pointer sits still for 1 s, dump that IB (VMID 0) to see which packet it is stuck on.
 namespace {
 void vcnReadMode() {
+	// The file is user-writable: experiment switches only with -rmbvcnexp.
+	static int allowed = -1;
+	if (allowed < 0)
+		allowed = checkKernelArgument("-rmbvcnexp") ? 1 : 0;
+	if (!allowed)
+		return;
 	auto ctx = vfs_context_create(nullptr);
 	vnode_t vp = nullptr;
 	uint32_t mode = 0;

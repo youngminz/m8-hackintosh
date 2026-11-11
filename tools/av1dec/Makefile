@@ -1,4 +1,5 @@
-# Cross-build for the M8 (x86_64) on this Mac; copy the results to m8lan:m8/vt/.
+# Build on a Mac (cross-build for x86_64), or on the target itself after `xcode-select --install`.
+# Copy the results to the target's ~/m8/vt/.
 CC = clang -target x86_64-apple-macos13 -O1 -Wall -Wno-unused-parameter -Wno-four-char-constants
 FW = -framework IOKit -framework CoreFoundation -framework CoreVideo -framework IOSurface -framework CoreMedia -framework VideoToolbox
 all: av1dec vtav1test AV1AMDDecoder.bundle

@@ -117,6 +117,18 @@ Tahoe용 커널 패치(Identifier `kernel`, MinKernel 25.0.0, Count 1): `now - p
 | Find | `4d 89 c1 49 29 c9 72 74 48 8b 46 20` |
 | Replace | `4d 89 c1 49 29 c9 72 52 48 8b 46 20` |
 
+### 4.4 패닉 뒤 재부팅되지 않고 멈춤
+
+4.3의 패닉은 패닉 보고서를 저장한 뒤 재부팅하지 않고 멈췄다. 전원 버튼으로 끌 때까지 그대로였다.
+
+- 이 기기의 ACPI FADT 재시작 레지스터는 I/O 포트 `0xB2`에 `0xBE`를 쓰는 SMI다. 재시작을 펌웨어(SMM) 코드가 처리한다.
+- 평소 재시작에서는 RembrandtGfx가 그 전에 GPU 엔진을 멈추고 PSP와 SMU를 정리한다(`psp-exit`). 패닉 재시작은 이것을 건너뛰고 바로 펌웨어 재시작으로 간다.
+- 부팅 초반의 패닉은 잘 재부팅됐고, GPU가 돌고 있을 때의 패닉만 멈췄다. 그래서 GPU와 PSP가 살아 있는 상태의 펌웨어 재시작에서 멈춘다고 추정한다(원래 방식으로 같은 조건을 재현하는 대조 시험은 하지 않았다).
+
+수정(`kext/panicreset.cpp`): 커널의 `PEHaltRestartInternal`을 가로채, 패닉 재시작(type 4, 9)에서는 플랫폼 패닉 동작까지 원래대로 돌린 뒤 FCH 리셋 레지스터 `0xCF9`에 `0x02`, `0x0E`를 써서 콜드 리셋한다. 그래도 돌아오면 키보드 컨트롤러 리셋(`0x64`에 `0xFE`), 그다음 원래 경로로 간다. Sequoia와 Tahoe에 같은 함수가 있다.
+
+시험: AV1 하드웨어 디코딩과 Metal 부하 중에 `sudo sysctl -w debug.rmb_panic=0x7061`로 패닉을 내자 50초 만에 스스로 다시 부팅했고 패닉 보고서도 남았다. `sysctl -w debug.rmb_panicreset=0`이나 부팅 인자 `-rmbnopanicreset`로 원래 방식으로 돌린다.
+
 ## 5. 커널 확장의 Tahoe 처리 (`kext/`)
 
 - VCN 훅은 Sequoia와 같이 `-rmbvcn`으로 켠다. 구조체 오프셋과 `waitForStamp`가 Tahoe 드라이버에서도 같았다. Tahoe에서만 끄려면 `-rmbnovcntahoe`.
@@ -127,4 +139,3 @@ Tahoe용 커널 패치(Identifier `kernel`, MinKernel 25.0.0, Count 1): `now - p
 ## 6. 남은 것
 
 - USB 오디오 끊김과 수 시간 단위 안정성 확인.
-- 패닉 뒤 자동 재부팅이 되지 않고 멈춘다.

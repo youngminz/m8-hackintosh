@@ -4,7 +4,7 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 
 이 저장소는 완성된 EFI 배포판이 아니다. 같은 기기나 같은 칩(Rembrandt, Radeon 660M과 680M)으로 작업하는 사람이 참고할 자료다. 대부분의 패치는 macOS 15.8.2의 드라이버 바이너리에 맞춰져 있어 다른 버전에서는 그대로 동작하지 않을 수 있다.
 
-사람이 읽어도 되고, AI 에이전트에게 이 문서를 주고 자기 PC에서 같은 작업을 시켜도 되게 썼다. 각 단계에 배경, 절차, 검증 명령, 실패 시 대응이 있다.
+사람이 읽어도 되고, AI 에이전트에게 이 문서를 주고 자기 PC에서 같은 작업을 시켜도 되게 썼다. 각 단계에 배경, 절차, 검증 명령, 실패 시 대응이 있다. 이 작업을 에이전트에게 실제로 어떻게 시켰는지는 [`PROMPTS.md`](PROMPTS.md)에 모았다. 처음이라면 거기서 시작하면 된다.
 
 ## 하드웨어
 
@@ -72,11 +72,44 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 
 | 역할 | 내용 |
 |---|---|
-| 작업용 컴퓨터 | 에이전트가 도는 곳. 여기서 교차 컴파일하고 SSH로 대상 PC를 다룬다. 이 기록에서는 Apple 실리콘 맥이었다 |
+| 작업용 컴퓨터 | 에이전트가 도는 곳. 여기서 빌드하고 SSH로 대상 PC를 다룬다. 이 기록에서는 Apple 실리콘 맥이었다. 맥이 아니거나 없어도 된다(아래) |
 | 대상 PC | 유선랜으로 같은 네트워크에 연결. 유선랜 드라이버가 그래픽이나 USB와 무관해서, 화면이 죽어도 SSH는 유지된다 |
 | 사용자 | 대상 PC 앞에서 전원, BIOS, 화면 확인, 비밀번호 입력을 맡는다 |
 
-대상 PC에는 개발 도구가 없다. macOS에서 `python3`를 실행하면 개발 도구 설치 창이 뜬다. 그래서 도구는 작업용 컴퓨터에서 `clang -target x86_64-apple-macos13`으로 빌드해 `scp`로 보낸다. zsh에서 `log`는 내장 명령이라 `/usr/bin/log`로 부른다.
+이 기록에서는 대상 PC에 개발 도구를 깔지 않고, 작업용 맥에서 `clang -target x86_64-apple-macos13`으로 빌드해 `scp`로 보냈다. 개발 도구가 없는 macOS에서 `python3`를 실행하면 개발 도구 설치 창이 뜬다. zsh에서 `log`는 내장 명령이라 `/usr/bin/log`로 부른다.
+
+### 작업용 컴퓨터별로 달라지는 것
+
+macOS가 꼭 필요한 작업은 macOS 전용 도구 빌드뿐이다. 이것은 대상 PC가 macOS로 부팅된 뒤 대상 PC에서 빌드하면 된다(`xcode-select --install`로 Command Line Tools를 깐다).
+
+| 작업 | 작업용 맥 | 작업용 리눅스나 윈도우(WSL) |
+|---|---|---|
+| 설치 (Ubuntu 라이브, QEMU) | 대상 PC 안에서 돈다. SSH만 있으면 된다 | 같다 |
+| RembrandtGfx 빌드 | `make LD=ld` (Xcode 링커) | 원 프로젝트 방식: clang과 [cctools-port](https://github.com/tpoechtrager/cctools-port)의 ld64 |
+| `tools/vtprobe`, `tools/av1dec`, AV1 플러그인 | 교차 빌드 | 대상 PC에서 빌드 |
+| SSDT 컴파일 | Homebrew `acpica` | `acpica-tools`의 `iasl` |
+| `config.plist` 편집 | `PlistBuddy`, `plutil` | Python `plistlib`이나 ProperTree |
+| `tools/re`(역분석) | Python과 capstone | 같다 |
+
+### 작업용 컴퓨터가 없을 때
+
+에이전트를 대상 PC 위에서 돌린다. 설치 단계는 Ubuntu 라이브 위에서, 이후는 macOS 위에서 돌린다. 이때 달라지는 것:
+
+- 재부팅, 패닉, 그래픽 멈춤이 나면 에이전트도 같이 꺼진다. 진행 상황을 디스크의 메모 파일에 남기게 하고, 다음 부팅에서 대화를 이어 간다.
+- 실패한 부팅은 볼 수 없으니 다음 부팅에서 읽는다. RembrandtGfx의 디스크 로그(`/private/var/log/rmb-msgbuf.log`, 이전 부팅 것이 이어 붙는다)와 `/Library/Logs/DiagnosticReports`의 패닉 보고서가 이 용도다.
+- Ubuntu 라이브는 재부팅하면 사라진다. Ventoy의 영구 저장(persistence)을 쓰거나 작업 파일을 USB에 둔다.
+- 되돌릴 길을 먼저 만든다. ESP의 이전 설정(`config-prev.plist`)을 OpenCore에서 고를 수 있게 하거나, Ubuntu USB로 들어가 되돌리는 방법을 사람이 알고 있어야 한다.
+
+### 기기가 다를 때 먼저 볼 것
+
+하드웨어를 덤프해 `hardware/`와 비교한다. 특히 다음이 다르면 해당 단계의 값을 다시 구한다.
+
+- **유선 연결**: 그래픽이 죽어도 SSH가 살아 있으려면 macOS 기본 드라이버로 되는 유선 연결이 필요하다. 이 기록은 모니터의 USB 랜(CDC NCM)을 썼다. 무선만 있다면 USB 랜 어댑터부터 준비한다.
+- 무선 카드(MT7922는 macOS 드라이버가 없다. Intel 카드면 itlwm 계열이 있다), 내장 유선랜 칩.
+- GPU(660M과 680M, PCI 리비전), VBIOS, 노트북이라면 패널과 백라이트(원 프로젝트가 노트북이다).
+- 디스크 컨트롤러(이 기록의 DRAM 없는 Maxio 컨트롤러 때문에 NVMeFix를 뺐다).
+- 모니터 연결 방식(USB-C DP alt mode, HDMI), BIOS 버전과 숨은 설정(S3 결론은 이 기기의 펌웨어에 한한다).
+- 다른 OS가 든 디스크. 지울 디스크는 모델명으로 지정하고, 나머지는 뽑아 두는 편이 안전하다.
 
 ## 작업하면서 알게 된 것
 
@@ -120,13 +153,13 @@ ssh <M8> 'sw_vers; uname -a; nvram boot-args'
 절차:
 
 1. [원 프로젝트](https://github.com/caoshiyuan0211-blip/winmax2-2022-6800u-hackintosh)를 받는다. `src/RembrandtGfx`가 macOS의 Navi 드라이버(AMDRadeonX6000)를 Rembrandt에서 돌게 하는 Lilu 플러그인이다. 패치는 커밋 `a114bde`에 맞춰 만들었으므로 그 커밋을 받는다(`git checkout a114bde`). 더 새 커밋에서는 패치가 적용되지 않을 수 있다.
-2. `kext/rembrandtgfx-m8.patch`를 적용하고 `kext/vcn.cpp`, `kext/mmhubremap.hpp`, `kext/mmhub2gc.hpp`를 `src/RembrandtGfx`에 넣는다.
+2. `kext/rembrandtgfx-m8.patch`를 적용하고 `kext/vcn.cpp`, `kext/panicreset.cpp`, `kext/mmhubremap.hpp`, `kext/mmhub2gc.hpp`를 `src/RembrandtGfx`에 넣는다.
 3. 펌웨어를 linux-firmware의 `yellow_carp_*.bin`에서 원 프로젝트의 `scripts/fw-extract.py`로 뽑는다(Makefile의 `fw/toc.bin` 규칙). VCN 펌웨어 `fw/vcn.bin`은 이 스크립트가 만들지 않으므로 직접 만든다. linux-firmware의 `amdgpu/vcn_3_1_2.bin`(`yellow_carp_vcn.bin`이 이것을 가리키는 링크다)에서 앞 0x100바이트 amdgpu 헤더를 잘라낸다. 이 파일이 없으면 `fw.s`를 조립하는 단계에서 빌드가 멈춘다.
 
 ```bash
 mkdir -p src/RembrandtGfx/fw && zstd -qdc <linux-firmware>/amdgpu/vcn_3_1_2.bin.zst | tail -c +257 > src/RembrandtGfx/fw/vcn.bin   # 압축되지 않은 파일이면 tail -c +257 <파일>
 ```
-4. 빌드한다. 원 프로젝트의 Makefile은 cctools 링커를 기대하지만 Xcode의 링커로도 된다.
+4. 빌드한다. 원 프로젝트의 Makefile은 cctools 링커를 기대한다(리눅스에서는 원 프로젝트 README대로 cctools-port를 쓴다). 맥에서는 Xcode의 링커로도 된다.
 
 ```bash
 make LD=ld
@@ -134,7 +167,7 @@ make LD=ld
 
 5. 대상 PC의 VBIOS를 뽑아 OpenCore 설정의 `DeviceProperties`에 `ATY,bin_image`로 넣는다(원 프로젝트의 `scripts/vfct-rom.py`, `augment-rom.py`). 자세한 것은 `docs/install.md`.
 6. 660M은 PCI 리비전을 Navi 23으로 보고하게 해야 한다(`kext/rembrandtgfx-pci-revision.patch`, 이미 통합 패치에 포함).
-7. `scripts/m8-apply-oc`로 ESP에 설치하고 재부팅한다. 이 스크립트는 대상 PC의 macOS 계정 이름이 `user`이고 작업 폴더가 `/Users/user/m8`이라고 가정한다(커널 확장의 디버깅 기능 일부도 같은 경로를 쓴다). 다른 이름이면 스크립트 머리의 `D=` 경로를 고친다.
+7. `scripts/m8-apply-oc`로 ESP에 설치하고 재부팅한다. 이 스크립트는 대상 PC의 macOS 계정 이름이 `user`이고 작업 폴더가 `/Users/user/m8`이라고 가정한다(커널 확장의 디버깅 기능 일부도 같은 경로를 쓴다). 다른 이름이면 스크립트 머리의 `D=` 경로를 고친다. 커널 확장 안의 경로(`/Users/user/m8/...`)는 `kext/vcn.cpp`와 통합 패치의 `sleep.cpp` 부분에 있고, 기본 부팅 인자로는 쓰이지 않는다(`-rmbvcnarm`, `-rmbvcnexp`, `-rmbphysdump`를 넣었을 때만).
 
 검증:
 
@@ -329,7 +362,7 @@ ssh <M8> 'sw_vers -productVersion; ioreg -l -w0 | grep -c AMDRadeonX6000MTLDrive
 
 실패 시: Tahoe가 멈추면 OpenCore 선택 화면에서 Sequoia로 부팅해 `/Volumes/Tahoe - Data/private/var/log/rmb-msgbuf.log`와 `/Volumes/Tahoe - Data/Library/Logs/DiagnosticReports`를 읽는다.
 
-아직 안 된 것: USB 오디오 확인, 수 시간 단위 안정성, 패닉 뒤 자동 재부팅(멈춘 채 남는다).
+아직 안 된 것: USB 오디오 확인, 수 시간 단위 안정성.
 
 ## 역분석 도구
 
@@ -371,7 +404,9 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 - `DeviceProperties`의 `ATY,bin_image` (자기 기기에서 뽑은 VBIOS. 원 프로젝트의 스크립트 참고)
 - `EFI/OC`의 OpenCore 1.0.5 바이너리와 위에 적은 커널 확장들, `acpi/`의 SSDT
 
-주요 부팅 인자: `-rmbvcn`(동영상 디코딩), `-rmbnostamppoll`(완료 폴링 끄기), `-rmbnodisklog`(디스크 로그 끄기, Tahoe에서는 무시), `-rmbnovcntahoe`(Tahoe에서만 VCN 훅 끄기).
+주요 부팅 인자: `-rmbvcn`(동영상 디코딩), `-rmbnostamppoll`(완료 폴링 끄기), `-rmbnodisklog`(디스크 로그 끄기, Tahoe에서는 무시), `-rmbnovcntahoe`(Tahoe에서만 VCN 훅 끄기), `-rmbnopanicreset`(패닉 재시작을 원래 방식으로).
+
+디버깅용으로만 쓰는 것(기본으로 꺼져 있다): `-rmbvcnexp`(`~/m8/vcn-mode` 파일로 VCN 실험 스위치), `-rmbphysdump`(`~/m8/physdump-req`에 적은 물리 메모리 범위를 덤프), `-rmbvcnarm`(VCN 한 번 켜기 모드와 MMIO 읽기 쓰기). 셋 다 일반 사용자 권한의 파일로 커널 동작을 바꾸므로 평소에는 넣지 않는다. sysctl `debug.rmb_smu`(SMU 메시지)와 `debug.rmb_panic`(시험용 패닉)은 root만 쓸 수 있다.
 
 ## 알아둘 것
 
@@ -379,12 +414,14 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 - `/System/Library/Video/Plug-Ins` 위에 이미지를 마운트하는 방식과 서명 없는 번들 로드는 SIP 일부를 끈 상태를 전제로 한다. 보안이 약해진다는 뜻이다.
 - AV1 디코더는 8비트와 10비트 4:2:0을 받는다. 10비트는 P010 표면으로 출력한다. 10비트는 1080p에서만 대조했고, Safari의 HDR 재생은 확인하지 않았다. 참조 프레임 축약 신호(`frame_refs_short_signaling`)는 구현하지 않았다.
 - VP9는 소프트웨어로 디코딩된다. Safari는 VP9를 자기 프로세스 안에서 디코딩하는데, 서명 없는 디코더 번들은 그 프로세스의 라이브러리 검증에 막혀 올라가지 못한다.
+- 패닉이 나면 커널 확장이 펌웨어의 재시작(SMI) 대신 칩셋 리셋(`0xCF9`)으로 재부팅한다(`kext/panicreset.cpp`). 이 기기는 GPU가 돌고 있을 때 패닉이 나면 원래 방식으로는 재부팅되지 않고 멈췄다(`docs/tahoe.md` 4.4).
 - 확인하지 않은 것은 문서에 "미확인"이나 "추정"으로 적어 두었다.
 
 ## 문서 목록
 
 | 파일 | 내용 |
 |---|---|
+| `PROMPTS.md` | 에이전트에게 실제로 한 말을 단계별로 모은 것, 환경이 다를 때 덧붙일 말 |
 | `docs/install.md` | 설치와 첫 부팅 절차(실제 명령, 가상 머신 실행 스크립트, 문제와 해결, 복구 절차) |
 | `docs/vcn-h264-hevc-bringup.md` | VCN 레지스터 지도, 헛다리, 디버깅 기법, 복구와 함정 |
 | `docs/worklog-av1-s3.md` | AV1 작업과 S3 실험의 시간순 기록, 수치, 막혔던 지점 |
