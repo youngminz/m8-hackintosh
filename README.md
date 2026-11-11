@@ -28,8 +28,9 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 | USB 오디오 | 동작 (커널 패치 필요, 아래 참고) |
 | 유선랜 | 동작 (LucyRTL8125Ethernet) |
 | S3 잠자기 | 안 됨. 잠들기는 되지만 펌웨어의 S3 복귀가 OS와 무관하게 고장나 깨어나지 못함(아래 단계 5). 잠자기를 꺼 두고 쓴다 |
+| VP9 하드웨어 디코딩 (8비트와 10비트, VideoToolbox) | Chrome에서 동작. Safari는 서명 검증에 막혀 소프트웨어로 디코딩한다(아래 단계 4-2) |
 | JPEG 하드웨어 디코딩 | 안 됨 (커널 가속기에 JPEG 링이 없음) |
-| macOS Tahoe 26.7.3 (별도 볼륨) | 부팅, Metal 가속, 유선랜, H.264/HEVC/AV1 하드웨어 디코딩 동작. 아래 단계 6 |
+| macOS Tahoe 26.7.3 (별도 볼륨) | 부팅, Metal 가속, 유선랜, H.264/HEVC/AV1/VP9 하드웨어 디코딩 동작(VP9는 Chrome). 아래 단계 6 |
 
 ### 확인한 해상도
 
@@ -38,10 +39,12 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 | 코덱 | 일치를 확인한 해상도 | 드라이버가 받는 한계 |
 |---|---|---|
 | AV1 | 1440p, 4K, 4096x2304, 5K, 7680x4320, 8192x4320 | 8192x4320 (높이 4352는 거부) |
+| VP9 | 1440p, 4K, 4096x2304, 5K, 7680x4320, 8192x4320(타일 16열까지) | AV1 경로를 빌리므로 같음 |
 | HEVC | 1080p (그 이상은 대조하지 않음) | 4096x4096 |
 | H.264 | 1080p (그 이상은 대조하지 않음) | 4096x2304 |
 
-- VideoToolbox 경로로도 7680x4320의 AV1이 일치했다.
+- VideoToolbox 경로로도 7680x4320의 AV1과 VP9가 일치했다.
+- VP9에서 타일 열이 32개인 스트림(폭 8192에서만 가능)은 성공 상태로 검은 화면이 나와서, 디코더가 16열 초과를 거부하게 했다. 원인은 확인하지 못했다.
 - 프레임당 시간(완료를 기다리는 동기 호출 기준): 1440p 11에서 13ms, 4K 15에서 18ms, 8K 36에서 39ms.
 
 ## 저장소 구성
@@ -56,6 +59,7 @@ GMKtec NucBox M8 미니 PC에 macOS 15.8.2(Sequoia, 24H232)를 올리고, 내장
 | `tools/vtprobe` | VideoToolbox 하드웨어 디코딩 여부와 출력 프레임 검증 |
 | `tools/avdprobe`, `tools/avdtrace` | AMD VA 드라이버 직접 호출과 호출 추적 |
 | `tools/av1dec` | AV1 헤더 파서, 단독 디코더, VideoToolbox 디코더 번들 |
+| `tools/vp9dec` | VP9 헤더 파서, VCN용 VP9 메시지(Mesa에서 옮김), 단독 디코더, VideoToolbox 디코더, 빌드별 드라이버 주소(`vp9addr.h`) |
 | `tools/re` | dyld 공유 캐시와 커널 컬렉션을 직접 파싱해 디스어셈블하는 스크립트 |
 | `tools/hii` | AMI BIOS 설정 양식(HII) 파서. 메뉴에 안 보이는 설정 항목을 찾는다 |
 | `docs/` | 작업 노트와 역분석 문서. VCN 레지스터 지도와 헛다리는 `docs/vcn-h264-hevc-bringup.md` |
@@ -299,6 +303,52 @@ ssh <M8> '/usr/bin/log show --last 5m --predicate "eventMessage CONTAINS \"AV1AM
 - 디코더를 직접 시험할 때 VideoToolbox가 디코딩을 별도 프로세스(VTDecoderXPCService)로 보내면 프로세스 내 훅이나 등록이 먹지 않는다. `defaults write com.apple.coremedia VTDecodeServer -string never`로 프로세스 내 디코딩을 강제하고, 끝나면 지운다.
 - 원격에서 `pmset sleepnow` 같은 지연 명령을 걸 때는 `nohup`으로 걸고, 실제로 실행됐는지 결과로 확인한다. SSH가 닫히면 백그라운드 명령이 같이 죽을 수 있다.
 
+## 단계 4-2: VP9 하드웨어 디코딩
+
+AMD VA 드라이버에는 VP9 처리기가 없다. 칩과 펌웨어는 VP9를 지원하므로, 드라이버의 AV1 경로를 빌려 VP9 메시지를 보낸다. 전제는 단계 4가 끝난 것이다.
+
+원리:
+
+1. 드라이버에게 AV1 디코더를 만들게 한다. 버퍼 할당, 명령 제출, 완료 처리는 드라이버가 그대로 한다.
+2. 자기 프로세스 안에서 `AvdVcnAv1DecDataProcessor`의 가상 함수 표에서 세 개를 바꾼다.
+   - `ProcessCreateDecodeSession`: 세션 생성 메시지의 스트림 종류를 AV1(0x13)에서 VP9(0x11)로 바꾼다.
+   - `initHWContext`: 문맥 버퍼에 VP9의 기본 확률 표를 쓴다.
+   - `SetDecodeMessageFields`: 드라이버가 만든 디코드 메시지에서 AV1 메시지 항목을 VP9 메시지로 바꾸고, 확률 버퍼에 VP9 표를 쓴다.
+3. VP9 메시지 형식과 기본 확률 표는 Mesa(`ac_vcn_dec.h`, `radeon_vcn_dec.c`)에서 옮겼다(`tools/vp9dec/vcn_vp9.h`, `vp9_probs.h`, `vp9msg.h`).
+4. 드라이버 안의 함수 주소는 macOS 빌드마다 다르다. `tools/vp9dec/vp9addr.h`에 15.8.2(24H232)와 26.7.3(25G342)의 값이 있고, 실행 중인 빌드(`kern.osversion`)의 값을 골라 가상 함수 표가 기대와 같은지 확인한 뒤에만 바꾼다. 표에 없는 빌드에서는 VP9를 끈다. 구조체 오프셋은 두 빌드에서 같았다(세 함수의 디스어셈블을 비교). 새 빌드의 값은 머리말의 `tools/re/dsc.py` 명령으로 구한다.
+
+절차와 검증:
+
+```bash
+make -C tools/vp9dec vp9dec
+```
+
+```bash
+ssh <M8> './vp9dec test-vp9.ivf 120 out.nv12'
+```
+
+시험 영상은 libvpx로 만든 8비트 4:2:0 ivf다. 출력을 ffmpeg의 소프트웨어 디코딩과 비교한다(`tools/av1dec/cmp.py`). 이 기록에서는 1080p 120프레임, 타일 4열 1080p, 4K 모두 차이가 0이었고 프레임당 3ms(1080p), 8에서 9ms(4K)였다.
+
+VideoToolbox 쪽은 `tools/av1dec`의 번들에 같이 들어간다(`make`가 `vp9vt.c`를 함께 빌드한다). 설치는 단계 4와 같다. VP9는 보조 디코더라, 클라이언트가 먼저 요청해야 목록에 들어간다.
+
+```bash
+ssh <M8> 'CODEC=vp09 SUPP=1 ./vtav1test test-vp9.mp4 120 - system'
+```
+
+`VTIsHardwareDecodeSupported(vp09) = 1`이 나오고 프레임이 디코딩된다.
+
+### 브라우저: Chrome은 되고 Safari는 안 된다
+
+- **Safari**: VideoToolbox 안에 "이 코덱은 요청한 프로세스 안에서 디코더를 연다"는 목록이 박혀 있다(`avc1`, `vp09` 등, `av01`은 없음). 이 동작은 `com.apple.developer.videotoolbox.client-sandboxed-decoder` 권한이 있는 프로세스에만 해당하는데, Safari의 GPU 프로세스가 그 권한을 가진 Apple 플랫폼 바이너리다. 그래서 VP9 번들이 Safari 프로세스 안에 올라가려다 라이브러리 검증에 걸리고(`mapping process is a platform binary, but mapped file is not`), WebKit은 내장 libvpx로 넘어간다. 플랫폼 바이너리에는 Apple이 직접 서명한 코드만 올라가므로 Apple 개발자 계정으로 서명해도 풀리지 않는다.
+- **Chrome**: 그 권한이 없어서 VP9도 AV1처럼 시스템 디코더 서비스(`VTDecoderXPCService`)로 가고, 거기서는 이 번들이 올라간다. Chrome 157에서 DevTools의 미디어 정보가 `kVideoDecoderName = VideoToolboxVideoDecoder`, `kIsPlatformVideoDecoder = true`였고, 디코더 서비스가 `VP9AMD: startSession 1920x1080`을 남겼다. 1080p30 VP9를 60초 재생해 1965프레임 중 4프레임 누락, Chrome GPU 프로세스 CPU 6%, 디코더 서비스 2%였다. Chrome은 AV1도 같은 경로로 하드웨어 디코딩한다.
+- 유튜브는 하드웨어 AV1을 지원하는 브라우저에 AV1을 먼저 준다. VP9 하드웨어 디코딩이 실제로 쓰이는 것은 AV1 버전이 없는 영상이다.
+
+알아둘 것:
+
+- 가상 함수 표를 바꾸면 그 프로세스의 모든 AV1 디코더에 걸린다. 그래서 훅은 VP9 세션이 드라이버를 부르는 동안의 스레드에서만 동작하고, 나머지는 원래 함수로 넘긴다.
+- Mesa는 이 세대의 VCN에서 동적 DPB를 쓰지만, 드라이버가 AV1용으로 잡는 고정 DPB로도 동작했다.
+- 세그멘테이션이나 숨은 참조 프레임이 든 스트림, 스트림 중간의 해상도 변경은 시험하지 않았다.
+
 ## 단계 5: S3 잠자기 (안 됨, 펌웨어 문제로 확정)
 
 결론부터: 이 BIOS(AMI, `M8 V1.04`)의 S3 복귀가 동작하지 않는다. OS와 무관하며 macOS에서 고칠 수 없다. 잠자기를 꺼 두고(`pmset -a sleep 0`) 쓴다.
@@ -392,6 +442,7 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 | VCN 관련 구조체 오프셋 | `kext/vcn.cpp` | 각 주석에 적힌 함수의 디스어셈블과 대조 |
 | AVD 인터페이스 구조체 | `tools/avdprobe`, `tools/av1dec` | `avdprobe`가 기능 목록을 정상 출력하는지 |
 | AV1 입력 구조체 배치 | `tools/av1dec/avdfill.h` | `av1dec` 출력이 소프트웨어 디코딩과 일치하는지 |
+| VP9 가로채기의 함수 주소와 오프셋 | `tools/vp9dec/vp9addr.h` | 실행 시 표가 맞지 않으면 스스로 멈춘다. `tools/re/dsc.py`로 새 주소를 구한다 |
 | VTVideoDecoder 구조체 | `tools/av1dec/av1vt.c` | Apple의 `AV1DecoderSW.bundle`의 표와 대조(`docs/worklog-av1-s3.md`) |
 | 플러그인 이미지 | `scripts/m8-vtplugins` | macOS 업데이트 후 `build`로 다시 만든다 |
 | Tahoe용 커널 패치 네 개 (10비트 태그, 시간 역행, xHCI, fq_codel) | `configs/config.plist` | Darwin 25 빌드가 바뀌면 각 Find가 의도한 함수에서만 맞는지(`docs/tahoe.md`) |
@@ -412,8 +463,8 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 
 - 실험 기록이다. 커널 확장의 훅과 구조체 오프셋, AV1 디코더의 구조체 배치는 macOS 15.8.2의 바이너리를 역분석해 얻은 것이라, macOS를 업데이트하면 깨질 수 있다. 업데이트 후에는 플러그인 이미지도 다시 만들어야 한다(스크립트가 빌드 번호가 다르면 마운트하지 않는다).
 - `/System/Library/Video/Plug-Ins` 위에 이미지를 마운트하는 방식과 서명 없는 번들 로드는 SIP 일부를 끈 상태를 전제로 한다. 보안이 약해진다는 뜻이다.
-- AV1 디코더는 8비트와 10비트 4:2:0을 받는다. 10비트는 P010 표면으로 출력한다. 10비트는 1080p에서만 대조했고, Safari의 HDR 재생은 확인하지 않았다. 참조 프레임 축약 신호(`frame_refs_short_signaling`)는 구현하지 않았다.
-- VP9는 소프트웨어로 디코딩된다. Safari는 VP9를 자기 프로세스 안에서 디코딩하는데, 서명 없는 디코더 번들은 그 프로세스의 라이브러리 검증에 막혀 올라가지 못한다.
+- AV1과 VP9 디코더는 8비트와 10비트 4:2:0을 받는다. 10비트는 P010 표면으로 출력한다. 10비트는 1080p에서만 대조했고, Safari의 HDR 재생은 확인하지 않았다. 참조 프레임 축약 신호(`frame_refs_short_signaling`)는 구현하지 않았다.
+- VP9 하드웨어 디코더는 Chrome 같은 브라우저에서만 쓰인다. Safari는 VP9를 자기 프로세스 안에서 디코딩하는데, 서명 없는 디코더 번들은 그 프로세스의 라이브러리 검증에 막혀 올라가지 못한다(단계 4-2).
 - 패닉이 나면 커널 확장이 펌웨어의 재시작(SMI) 대신 칩셋 리셋(`0xCF9`)으로 재부팅한다(`kext/panicreset.cpp`). 이 기기는 GPU가 돌고 있을 때 패닉이 나면 원래 방식으로는 재부팅되지 않고 멈췄다(`docs/tahoe.md` 4.4).
 - 확인하지 않은 것은 문서에 "미확인"이나 "추정"으로 적어 두었다.
 
@@ -434,6 +485,7 @@ capstone이 필요하다. 동적 추적은 `tools/avdtrace`가 예시다. 자기
 
 - RembrandtGfx 원 프로젝트: [winmax2-2022-6800u-hackintosh](https://github.com/caoshiyuan0211-blip/winmax2-2022-6800u-hackintosh) (GPL-2.0). `kext/`의 내용은 그 파생물이다.
 - [OpenCore](https://github.com/acidanthera/OpenCorePkg), [Lilu](https://github.com/acidanthera/Lilu), [AMD Vanilla 패치](https://github.com/AMD-OSX/AMD_Vanilla)
+- VCN 메시지 형식: Mesa의 `ac_vcn_dec.h`, `radeon_vcn_dec.c` (MIT). `tools/vp9dec`의 구조체와 확률 표는 거기서 옮긴 것이고 저작권 고지를 유지했다
 - 라이선스는 폴더에 따라 다르다.
   - `kext/`: GPL-2.0 (`kext/LICENSE`). GPL-2.0인 원 프로젝트의 파생물이다.
   - 그 밖의 전부(`tools/`, `scripts/`, `acpi/`, `configs/`, `docs/` 등): MIT (`LICENSE`).

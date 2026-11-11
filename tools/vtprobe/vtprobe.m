@@ -13,7 +13,7 @@
 static void query(void) {
     struct { const char *n; CMVideoCodecType t; } c[] = {
         {"h264", kCMVideoCodecType_H264}, {"hevc", kCMVideoCodecType_HEVC},
-        {"av1", 'av01'}};
+        {"vp9", 'vp09'}, {"av1", 'av01'}};
     for (int i = 0; i < 4; i++)
         printf("%-5s hardware decode: %s\n", c[i].n, VTIsHardwareDecodeSupported(c[i].t) ? "YES" : "no");
 }

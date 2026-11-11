@@ -19,10 +19,18 @@ IMG="$DIR/vtplugins.dmg"
 MP=/System/Library/Video/Plug-Ins
 PLIST=/Library/LaunchDaemons/local.m8.vtplugins.plist
 mounted() { mount | grep -q " on $MP (hfs"; }
+# The decoder services keep the plug-ins open, so a plain detach fails while one runs (and set -e
+# would then stop a rebuild with the old image still mounted). Stop them first; launchd starts them
+# again on the next decode.
+release() {
+    mounted || return 0
+    pkill -x VTDecoderXPCService 2>/dev/null || true; sleep 1
+    hdiutil detach -quiet "$MP" 2>/dev/null || hdiutil detach -quiet -force "$MP" || { echo "cannot unmount $MP"; exit 1; }
+}
 case "$1" in
 build)
     [ -d "$2/Contents/MacOS" ] || { echo "usage: $0 build AV1AMDDecoder.bundle"; exit 1; }
-    mounted && hdiutil detach -quiet "$MP"
+    release
     mkdir -p "$DIR"; rm -f "$IMG"
     SIZE=$(( $(du -sm "$MP" | cut -f1) * 3 + 16 ))
     hdiutil create -quiet -size ${SIZE}m -fs HFS+ -volname VTPlugIns "$IMG"
@@ -42,7 +50,7 @@ mount)
     fi
     echo "mounted: $(ls "$MP" | wc -l | tr -d ' ') plug-ins" ;;
 unmount)
-    mounted && hdiutil detach "$MP" || echo "not mounted" ;;
+    if mounted; then release; else echo "not mounted"; fi ;;
 install)
     install -o root -g wheel -m 755 "$0" /usr/local/sbin/m8-vtplugins
     cat > "$PLIST" <<P
@@ -61,7 +69,7 @@ P
     chown root:wheel "$PLIST"; chmod 644 "$PLIST"
     echo "installed $PLIST" ;;
 uninstall)
-    mounted && hdiutil detach "$MP"
+    release
     rm -f "$PLIST" "$IMG" /usr/local/sbin/m8-vtplugins; echo "removed" ;;
 *) echo "usage: $0 build BUNDLE | mount | unmount | install | uninstall"; exit 1 ;;
 esac
